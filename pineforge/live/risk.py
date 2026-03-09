@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-logger = logging.getLogger("strateg.live.risk")
+logger = logging.getLogger("pineforge.live.risk")
 
 
 @dataclass

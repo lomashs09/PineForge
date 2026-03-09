@@ -24,7 +24,7 @@ from .feed import fetch_candles, detect_new_bar, get_latest_closed_bar_time
 from .executor import Executor
 from .risk import RiskManager
 
-logger = logging.getLogger("strateg.live.bridge")
+logger = logging.getLogger("pineforge.live.bridge")
 
 
 class LiveBridge:
@@ -138,7 +138,7 @@ class LiveBridge:
         mode_str = "LIVE" if cfg.is_live else "DRY RUN"
 
         print("=" * 60)
-        print(f"  Strateg Live Trading Bridge ({mode_str})")
+        print(f"  PineForge Live Trading Bridge ({mode_str})")
         print("=" * 60)
         print(f"  Script:    {Path(cfg.script_path).name}")
         print(f"  Symbol:    {cfg.symbol}")

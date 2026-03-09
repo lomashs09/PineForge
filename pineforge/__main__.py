@@ -1,4 +1,4 @@
-"""CLI entry point: python -m strateg run --script strategy.pine --data ohlcv.csv"""
+"""CLI entry point: python -m pineforge run --script strategy.pine --data ohlcv.csv"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="strateg",
+        prog="pineforge",
         description="Pine Script v5 Strategy Backtester Engine",
     )
     sub = parser.add_subparsers(dest="command")
@@ -141,7 +141,7 @@ def _run_live(args: argparse.Namespace) -> None:
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         handlers=[
-            logging.FileHandler("strateg_live.log"),
+            logging.FileHandler("pineforge_live.log"),
             logging.StreamHandler(sys.stderr),
         ],
     )

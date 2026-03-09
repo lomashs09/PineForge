@@ -8,7 +8,7 @@ from typing import Any
 
 from ..data import DataFeed
 
-logger = logging.getLogger("strateg.live.feed")
+logger = logging.getLogger("pineforge.live.feed")
 
 # MetaAPI timeframe strings map to approximate durations in seconds
 TIMEFRAME_SECONDS = {

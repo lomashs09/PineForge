@@ -1,8 +1,8 @@
 """Tests for the Pine Script v5 lexer."""
 
 import pytest
-from strateg.lexer import Lexer, LexerError
-from strateg.tokens import TokenType
+from pineforge.lexer import Lexer, LexerError
+from pineforge.tokens import TokenType
 
 
 def tokenize(source: str) -> list:

@@ -6,8 +6,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from strateg.engine import Engine
-from strateg.data import load_csv
+from pineforge.engine import Engine
+from pineforge.data import load_csv
 
 SCRIPT = (Path(__file__).parent / "sma_crossover.pine").read_text()
 DATA_PATH = Path(__file__).parent / "sample_data.csv"

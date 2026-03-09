@@ -1,6 +1,6 @@
-# Strateg
+# PineForge
 
-A Python engine that lexes, parses, and interprets **Pine Script v5** strategy files (`.pine`), executes them bar-by-bar against OHLCV data with a simulated broker, and produces full backtest results — trade logs, equity curves, and performance metrics. It also includes a **live trading bridge** for executing strategies on a real MetaTrader 5 account via MetaAPI Cloud.
+A Python engine that lexes, parses, and interprets **Pine Script v5** pineforgey files (`.pine`), executes them bar-by-bar against OHLCV data with a simulated broker, and produces full backtest results — trade logs, equity curves, and performance metrics. It also includes a **live trading bridge** for executing pineforgeies on a real MetaTrader 5 account via MetaAPI Cloud.
 
 ---
 
@@ -24,7 +24,7 @@ A Python engine that lexes, parses, and interprets **Pine Script v5** strategy f
   - [Running Live](#running-live)
   - [Live Trading Options](#live-trading-options)
   - [Risk Management](#risk-management)
-- [Writing a Pine Script Strategy](#writing-a-pine-script-strategy)
+- [Writing a Pine Script PineForgey](#writing-a-pine-script-pineforgey)
   - [Minimal Example](#minimal-example)
   - [Using Inputs and Indicators](#using-inputs-and-indicators)
 - [Supported Pine Script Features](#supported-pine-script-features)
@@ -33,8 +33,8 @@ A Python engine that lexes, parses, and interprets **Pine Script v5** strategy f
   - [Technical Analysis (ta.*)](#technical-analysis-ta)
   - [Math (math.*)](#math-math)
   - [Input (input.*)](#input-input)
-  - [Strategy (strategy.*)](#strategy-strategy)
-- [Example Strategies](#example-strategies)
+  - [PineForgey (pineforgey.*)](#pineforgey-pineforgey)
+- [Example PineForgeies](#example-pineforgeies)
 - [Backtest Output & Metrics](#backtest-output--metrics)
 - [CSV Format](#csv-format)
 - [Project Structure](#project-structure)
@@ -48,15 +48,15 @@ A Python engine that lexes, parses, and interprets **Pine Script v5** strategy f
 ## Features
 
 - **Pine Script v5 compiler pipeline** — Lexer, Parser (recursive descent), AST, tree-walking Interpreter
-- **Bar-by-bar execution** — mirrors how TradingView evaluates strategies
+- **Bar-by-bar execution** — mirrors how TradingView evaluates pineforgeies
 - **Simulated broker** — market orders, entry/exit logic, position tracking, commission & slippage
 - **Series type** — every value is a time series with `[n]` history access, just like Pine
 - **14 built-in TA indicators** — SMA, EMA, RMA, RSI, MACD, Crossover/Under, Highest, Lowest, ATR, StdDev, and more
 - **Data download** — fetch OHLCV data from Yahoo Finance for any supported ticker
 - **Performance metrics** — win rate, profit factor, Sharpe ratio, max drawdown, equity curve
-- **Live trading bridge** — execute strategies on MetaTrader 5 (Exness, etc.) via MetaAPI Cloud
+- **Live trading bridge** — execute pineforgeies on MetaTrader 5 (Exness, etc.) via MetaAPI Cloud
 - **Risk manager** — daily loss limits, max positions, trade cooldown, position sizing
-- **13 example strategies** — from simple crossovers to multi-factor scoring and regime-adaptive systems
+- **13 example pineforgeies** — from simple crossovers to multi-factor scoring and regime-adaptive systems
 
 ---
 
@@ -81,14 +81,14 @@ A Python engine that lexes, parses, and interprets **Pine Script v5** strategy f
                    │   Interpreter     │  interpreter.py, series.py
                    │  (Tree-Walking)   │  environment.py
                    └─────────┬─────────┘
-                             │ strategy.entry / strategy.close calls
+                             │ pineforgey.entry / pineforgey.close calls
               ┌──────────────┼──────────────┐
               │              │              │
     ┌─────────▼────┐  ┌─────▼──────┐  ┌───▼──────────┐
     │   Broker     │  │  Built-ins │  │   Engine     │
     │ (Simulated)  │  │ ta, math,  │  │ (Backtest    │
     │ Orders, PnL  │  │ input,     │  │  Orchestrator)│
-    └──────────────┘  │ strategy   │  └───┬──────────┘
+    └──────────────┘  │ pineforgey   │  └───┬──────────┘
                       └────────────┘      │
                                    ┌──────▼──────┐
                                    │   Results   │  results.py
@@ -111,29 +111,29 @@ Live Trading Path:
 
 | Module | File(s) | Purpose |
 |--------|---------|---------|
-| Lexer | `strateg/tokens.py`, `strateg/lexer.py` | Tokenizes Pine Script source into a token stream |
-| Parser | `strateg/parser.py`, `strateg/ast_nodes.py` | Recursive descent parser producing an AST |
-| Interpreter | `strateg/interpreter.py` | Tree-walking interpreter, executes AST per bar |
-| Series | `strateg/series.py` | Time-indexed series with `[n]` history access |
-| Environment | `strateg/environment.py` | Scoped symbol table, `var` persistence across bars |
-| Broker | `strateg/broker.py` | Simulated order execution, position tracking, PnL |
-| Engine | `strateg/engine.py` | Orchestrates the full backtest pipeline |
-| Data | `strateg/data.py` | CSV loading, Yahoo Finance download, symbol aliases |
-| Results | `strateg/results.py` | Computes all performance metrics from trade log |
-| Built-ins | `strateg/builtins/` | `ta.*`, `math.*`, `input.*`, `strategy.*` functions |
-| Live Bridge | `strateg/live/bridge.py` | Main live trading loop — poll, interpret, execute |
-| Live Executor | `strateg/live/executor.py` | Places/closes orders via MetaAPI RPC |
-| Live Feed | `strateg/live/feed.py` | Fetches candles from MetaAPI |
-| Live Risk | `strateg/live/risk.py` | Position sizing, daily loss limits, cooldowns |
-| Live Config | `strateg/live/config.py` | Loads trading parameters from `.env` and CLI args |
+| Lexer | `pineforge/tokens.py`, `pineforge/lexer.py` | Tokenizes Pine Script source into a token stream |
+| Parser | `pineforge/parser.py`, `pineforge/ast_nodes.py` | Recursive descent parser producing an AST |
+| Interpreter | `pineforge/interpreter.py` | Tree-walking interpreter, executes AST per bar |
+| Series | `pineforge/series.py` | Time-indexed series with `[n]` history access |
+| Environment | `pineforge/environment.py` | Scoped symbol table, `var` persistence across bars |
+| Broker | `pineforge/broker.py` | Simulated order execution, position tracking, PnL |
+| Engine | `pineforge/engine.py` | Orchestrates the full backtest pipeline |
+| Data | `pineforge/data.py` | CSV loading, Yahoo Finance download, symbol aliases |
+| Results | `pineforge/results.py` | Computes all performance metrics from trade log |
+| Built-ins | `pineforge/builtins/` | `ta.*`, `math.*`, `input.*`, `pineforgey.*` functions |
+| Live Bridge | `pineforge/live/bridge.py` | Main live trading loop — poll, interpret, execute |
+| Live Executor | `pineforge/live/executor.py` | Places/closes orders via MetaAPI RPC |
+| Live Feed | `pineforge/live/feed.py` | Fetches candles from MetaAPI |
+| Live Risk | `pineforge/live/risk.py` | Position sizing, daily loss limits, cooldowns |
+| Live Config | `pineforge/live/config.py` | Loads trading parameters from `.env` and CLI args |
 
 ---
 
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/strateg.git
-cd strateg
+git clone https://github.com/your-username/pineforge.git
+cd pineforge
 
 # Install in editable mode
 python3 -m pip install -e .
@@ -163,19 +163,19 @@ Use the `download` subcommand to fetch OHLCV data from Yahoo Finance:
 
 ```bash
 # Daily gold data from 2020 to today
-python3 -m strateg download XAUUSD --start 2020-01-01 -o examples/xauusd_daily.csv
+python3 -m pineforge download XAUUSD --start 2020-01-01 -o examples/xauusd_daily.csv
 
 # 1-hour gold data (limited to ~730 days back by Yahoo)
-python3 -m strateg download XAUUSD --interval 1h --start 2024-06-01 -o examples/xauusd_1h.csv
+python3 -m pineforge download XAUUSD --interval 1h --start 2024-06-01 -o examples/xauusd_1h.csv
 
 # 15-minute data (limited to ~60 days back)
-python3 -m strateg download XAUUSD --interval 15m -o examples/xauusd_15m.csv
+python3 -m pineforge download XAUUSD --interval 15m -o examples/xauusd_15m.csv
 
 # Apple stock, weekly bars
-python3 -m strateg download AAPL --interval 1wk --start 2015-01-01 -o examples/aapl_weekly.csv
+python3 -m pineforge download AAPL --interval 1wk --start 2015-01-01 -o examples/aapl_weekly.csv
 
 # Bitcoin daily
-python3 -m strateg download BTC-USD --start 2020-01-01 -o examples/btc_daily.csv
+python3 -m pineforge download BTC-USD --start 2020-01-01 -o examples/btc_daily.csv
 ```
 
 **Download options:**
@@ -231,7 +231,7 @@ Any ticker not in this list is passed directly to Yahoo Finance (e.g., `AAPL`, `
 ### Using a CSV File
 
 ```bash
-python3 -m strateg run --script examples/sma_crossover.pine --data examples/xauusd_daily.csv
+python3 -m pineforge run --script examples/sma_crossover.pine --data examples/xauusd_daily.csv
 ```
 
 ### Using a Symbol (Auto-Download)
@@ -239,7 +239,7 @@ python3 -m strateg run --script examples/sma_crossover.pine --data examples/xauu
 Skip the CSV step — download and backtest in one command:
 
 ```bash
-python3 -m strateg run --script examples/ema_rsi_trend.pine --symbol XAUUSD --interval 1h --start 2024-06-01
+python3 -m pineforge run --script examples/ema_rsi_trend.pine --symbol XAUUSD --interval 1h --start 2024-06-01
 ```
 
 ### Print Trade Log
@@ -247,7 +247,7 @@ python3 -m strateg run --script examples/ema_rsi_trend.pine --symbol XAUUSD --in
 Add `--trades` to see every trade:
 
 ```bash
-python3 -m strateg run --script examples/rsi_mean_reversion.pine --data examples/xauusd_1h.csv --trades
+python3 -m pineforge run --script examples/rsi_mean_reversion.pine --data examples/xauusd_1h.csv --trades
 ```
 
 ### Backtest Options
@@ -270,7 +270,7 @@ python3 -m strateg run --script examples/rsi_mean_reversion.pine --data examples
 
 ## Live Trading
 
-The live module connects to MetaTrader 5 via [MetaAPI Cloud](https://metaapi.cloud/) and runs your Pine strategy in real-time against incoming candles.
+The live module connects to MetaTrader 5 via [MetaAPI Cloud](https://metaapi.cloud/) and runs your Pine pineforgey in real-time against incoming candles.
 
 ### MetaAPI Setup
 
@@ -292,10 +292,10 @@ A template is provided in `.env.example`.
 
 ### Running in Dry-Run Mode
 
-By default, the bridge runs in **dry-run mode** — it connects, fetches data, runs the strategy, and logs what trades it *would* place, but does not touch your account:
+By default, the bridge runs in **dry-run mode** — it connects, fetches data, runs the pineforgey, and logs what trades it *would* place, but does not touch your account:
 
 ```bash
-python3 -m strateg live --script examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h --lot 0.01
+python3 -m pineforge live --script examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h --lot 0.01
 ```
 
 ### Running Live
@@ -303,7 +303,7 @@ python3 -m strateg live --script examples/ema_rsi_trend.pine --symbol XAUUSDm --
 Add the `--live` flag to enable real order execution:
 
 ```bash
-python3 -m strateg live --script examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h --lot 0.01 --live
+python3 -m pineforge live --script examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h --lot 0.01 --live
 ```
 
 > **Warning:** This places real orders on your trading account. Start with a demo account.
@@ -321,7 +321,7 @@ python3 -m strateg live --script examples/ema_rsi_trend.pine --symbol XAUUSDm --
 | `--max-positions` | `1` | Max simultaneous open positions |
 | `--cooldown` | `60` | Minimum seconds between trades |
 | `--poll` | `60` | Poll interval in seconds |
-| `--lookback` | `200` | Number of historical bars for strategy warmup |
+| `--lookback` | `200` | Number of historical bars for pineforgey warmup |
 | `--live` | off | Enable real order execution (default is dry-run) |
 
 ### Risk Management
@@ -335,29 +335,29 @@ The live bridge includes an automatic risk manager that enforces:
 
 ---
 
-## Writing a Pine Script Strategy
+## Writing a Pine Script PineForgey
 
 ### Minimal Example
 
 ```pinescript
 //@version=5
-strategy("My Strategy", overlay=true)
+pineforgey("My PineForgey", overlay=true)
 
 fast = ta.sma(close, 10)
 slow = ta.sma(close, 30)
 
 if ta.crossover(fast, slow)
-    strategy.entry("Long", strategy.long)
+    pineforgey.entry("Long", pineforgey.long)
 
 if ta.crossunder(fast, slow)
-    strategy.close("Long")
+    pineforgey.close("Long")
 ```
 
 ### Using Inputs and Indicators
 
 ```pinescript
 //@version=5
-strategy("EMA Trend + RSI Filter", overlay=true)
+pineforgey("EMA Trend + RSI Filter", overlay=true)
 
 ema_len = input.int(50, "EMA Length")
 rsi_len = input.int(14, "RSI Length")
@@ -368,10 +368,10 @@ ema = ta.ema(close, ema_len)
 rsi = ta.rsi(close, rsi_len)
 
 if ta.crossover(close, ema) and rsi < rsi_ob
-    strategy.entry("Long", strategy.long)
+    pineforgey.entry("Long", pineforgey.long)
 
 if ta.crossunder(close, ema) or rsi > rsi_ob
-    strategy.close("Long")
+    pineforgey.close("Long")
 ```
 
 ---
@@ -453,26 +453,26 @@ if ta.crossunder(close, ema) or rsi > rsi_ob
 | `input.string(defval, title?)` | String input |
 | `input.source(defval, title?)` | Source series input |
 
-### Strategy (`strategy.*`)
+### PineForgey (`pineforgey.*`)
 
 | Function | Description |
 |----------|-------------|
-| `strategy(title, overlay?, ...)` | Declare strategy properties |
-| `strategy.entry(id, direction)` | Open a position (market order) |
-| `strategy.close(id)` | Close a position by entry ID |
-| `strategy.close_all()` | Close all open positions |
-| `strategy.exit(id, from_entry?, stop?, limit?)` | Set stop-loss / take-profit |
-| `strategy.order(id, direction)` | Place a generic order |
-| `strategy.long` | Long direction constant |
-| `strategy.short` | Short direction constant |
+| `pineforgey(title, overlay?, ...)` | Declare pineforgey properties |
+| `pineforgey.entry(id, direction)` | Open a position (market order) |
+| `pineforgey.close(id)` | Close a position by entry ID |
+| `pineforgey.close_all()` | Close all open positions |
+| `pineforgey.exit(id, from_entry?, stop?, limit?)` | Set stop-loss / take-profit |
+| `pineforgey.order(id, direction)` | Place a generic order |
+| `pineforgey.long` | Long direction constant |
+| `pineforgey.short` | Short direction constant |
 
 ---
 
-## Example Strategies
+## Example PineForgeies
 
-The `examples/` directory contains 13 ready-to-run strategies:
+The `examples/` directory contains 13 ready-to-run pineforgeies:
 
-| File | Strategy | Description |
+| File | PineForgey | Description |
 |------|----------|-------------|
 | `sma_crossover.pine` | SMA Crossover | Classic fast/slow SMA crossover |
 | `ema_crossover.pine` | EMA Crossover 9/21 | EMA 9 vs EMA 21 crossover |
@@ -494,13 +494,13 @@ Run any of them:
 
 ```bash
 # Backtest with auto-download
-python3 -m strateg run -s examples/bollinger_bands.pine --symbol XAUUSD --interval 1h --start 2024-06-01 --trades
+python3 -m pineforge run -s examples/bollinger_bands.pine --symbol XAUUSD --interval 1h --start 2024-06-01 --trades
 
 # Backtest with CSV
-python3 -m strateg run -s examples/atr_trend_follow.pine -d examples/xauusd_1h.csv --capital 5000
+python3 -m pineforge run -s examples/atr_trend_follow.pine -d examples/xauusd_1h.csv --capital 5000
 
 # Live dry-run
-python3 -m strateg live -s examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h
+python3 -m pineforge live -s examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h
 ```
 
 ---
@@ -511,7 +511,7 @@ A backtest prints a summary like this:
 
 ```
 ═══════════════════════════════════════
-  Strategy: EMA Trend + RSI Filter
+  PineForgey: EMA Trend + RSI Filter
 ═══════════════════════════════════════
   Initial Capital:    $10,000.00
   Final Equity:       $11,452.30
@@ -572,7 +572,7 @@ date,open,high,low,close,volume
 ## Project Structure
 
 ```
-strateg/
+pineforge/
 ├── __init__.py           # Package init, version
 ├── __main__.py           # CLI entry point (run, download, live)
 ├── tokens.py             # TokenType enum, Token dataclass
@@ -591,7 +591,7 @@ strateg/
 │   ├── ta.py             # ta.sma, ta.ema, ta.rsi, etc.
 │   ├── math_funcs.py     # math.abs, nz, na, etc.
 │   ├── input_funcs.py    # input.int, input.float, etc.
-│   └── strategy.py       # strategy.entry, strategy.close, etc.
+│   └── pineforgey.py       # pineforgey.entry, pineforgey.close, etc.
 ├── live/
 │   ├── __init__.py
 │   ├── config.py         # LiveConfig from .env + CLI args
@@ -600,7 +600,7 @@ strateg/
 │   ├── feed.py           # Candle fetching from MetaAPI
 │   └── risk.py           # Risk manager (daily loss, cooldown, sizing)
 examples/
-├── *.pine                # 15 example strategy scripts
+├── *.pine                # 15 example pineforgey scripts
 ├── *.csv                 # Sample data files
 ├── run_backtest.py       # Python-based backtest runner
 tests/
@@ -637,7 +637,7 @@ To run the live bridge 24/7, deploy to a cloud VM. Recommended free options:
 ```bash
 ssh ubuntu@<your-vm-ip>
 sudo apt update && sudo apt install -y python3 python3-pip git
-git clone <your-repo> strateg && cd strateg
+git clone <your-repo> pineforge && cd pineforge
 pip3 install -e .
 cp .env.example .env  # edit with your MetaAPI credentials
 ```
@@ -645,25 +645,25 @@ cp .env.example .env  # edit with your MetaAPI credentials
 Run persistently with systemd:
 
 ```ini
-# /etc/systemd/system/strateg.service
+# /etc/systemd/system/pineforge.service
 [Unit]
-Description=Strateg Live Trader
+Description=PineForge Live Trader
 After=network.target
 
 [Service]
 User=ubuntu
-WorkingDirectory=/home/ubuntu/strateg
-ExecStart=/usr/bin/python3 -m strateg live -s examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h --lot 0.01 --live
+WorkingDirectory=/home/ubuntu/pineforge
+ExecStart=/usr/bin/python3 -m pineforge live -s examples/ema_rsi_trend.pine --symbol XAUUSDm --timeframe 1h --lot 0.01 --live
 Restart=always
 RestartSec=30
-EnvironmentFile=/home/ubuntu/strateg/.env
+EnvironmentFile=/home/ubuntu/pineforge/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable strateg && sudo systemctl start strateg
+sudo systemctl enable pineforge && sudo systemctl start pineforge
 ```
 
 Other free options: **Google Cloud e2-micro** (always free), **AWS t2.micro** (12 months free), **Fly.io** (3 free VMs), or just a **Raspberry Pi** at home.
@@ -681,7 +681,7 @@ Other free options: **Google Cloud e2-micro** (always free), **AWS t2.micro** (1
 ### Areas that could use contributions
 
 - More `ta.*` indicators (Stochastic, Williams %R, Ichimoku, Pivot Points)
-- `strategy.exit` with trailing stop support
+- `pineforgey.exit` with trailing stop support
 - Multi-timeframe support (`request.security`)
 - Plotting / visualization of equity curves and indicators
 - `alert()` function with webhook/Telegram notifications

@@ -1,8 +1,8 @@
 """End-to-end tests for the backtesting engine."""
 
 import pytest
-from strateg.engine import Engine
-from strateg.data import DataFeed
+from pineforge.engine import Engine
+from pineforge.data import DataFeed
 
 
 def _make_trending_data(n: int = 100, start: float = 100.0, trend: float = 0.5) -> DataFeed:
@@ -126,7 +126,7 @@ if bar_index == 0
 
 class TestBroker:
     def test_position_tracking(self):
-        from strateg.broker import Broker
+        from pineforge.broker import Broker
         broker = Broker(initial_capital=10000.0)
         broker.submit_entry("test", "long", 1.0, 0)
         broker.process_orders(1, 100.0, 101.0, 99.0, 100.5)
@@ -134,7 +134,7 @@ class TestBroker:
         assert broker.position.direction == "long"
 
     def test_close_trade(self):
-        from strateg.broker import Broker
+        from pineforge.broker import Broker
         broker = Broker(initial_capital=10000.0)
         broker.submit_entry("test", "long", 1.0, 0)
         broker.process_orders(1, 100.0, 101.0, 99.0, 100.5)
@@ -145,7 +145,7 @@ class TestBroker:
         assert broker.closed_trades[0].pnl > 0
 
     def test_short_trade(self):
-        from strateg.broker import Broker
+        from pineforge.broker import Broker
         broker = Broker(initial_capital=10000.0)
         broker.submit_entry("test", "short", 1.0, 0)
         broker.process_orders(1, 100.0, 101.0, 99.0, 100.5)

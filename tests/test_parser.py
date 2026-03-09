@@ -1,9 +1,9 @@
 """Tests for the Pine Script v5 parser."""
 
 import pytest
-from strateg.lexer import Lexer
-from strateg.parser import Parser, ParseError
-from strateg import ast_nodes as ast
+from pineforge.lexer import Lexer
+from pineforge.parser import Parser, ParseError
+from pineforge import ast_nodes as ast
 
 
 def parse(source: str) -> ast.Script:

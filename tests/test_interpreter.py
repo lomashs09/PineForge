@@ -1,11 +1,11 @@
 """Tests for the Pine Script v5 interpreter."""
 
 import pytest
-from strateg.lexer import Lexer
-from strateg.parser import Parser
-from strateg.interpreter import Interpreter
-from strateg.series import Series, is_na, na_value
-from strateg import ast_nodes as ast
+from pineforge.lexer import Lexer
+from pineforge.parser import Parser
+from pineforge.interpreter import Interpreter
+from pineforge.series import Series, is_na, na_value
+from pineforge import ast_nodes as ast
 
 
 def make_interpreter(source: str) -> Interpreter:
@@ -102,21 +102,21 @@ class TestUserFunctions:
 
 class TestBuiltins:
     def test_nz(self):
-        from strateg.builtins import math_funcs
+        from pineforge.builtins import math_funcs
         interp = make_interpreter("x = nz(na, 5)")
         math_funcs.register(interp)
         interp.execute_bar(0)
         assert interp.env.get("x").current == 5
 
     def test_math_abs(self):
-        from strateg.builtins import math_funcs
+        from pineforge.builtins import math_funcs
         interp = make_interpreter("x = math.abs(-10)")
         math_funcs.register(interp)
         interp.execute_bar(0)
         assert interp.env.get("x").current == 10
 
     def test_math_max(self):
-        from strateg.builtins import math_funcs
+        from pineforge.builtins import math_funcs
         interp = make_interpreter("x = math.max(3, 7)")
         math_funcs.register(interp)
         interp.execute_bar(0)
