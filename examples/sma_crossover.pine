@@ -1,0 +1,14 @@
+//@version=5
+strategy("SMA Crossover", overlay=true)
+
+length_fast = input.int(10, "Fast Length")
+length_slow = input.int(30, "Slow Length")
+
+fast_sma = ta.sma(close, length_fast)
+slow_sma = ta.sma(close, length_slow)
+
+if ta.crossover(fast_sma, slow_sma)
+    strategy.entry("Long", strategy.long)
+
+if ta.crossunder(fast_sma, slow_sma)
+    strategy.close("Long")

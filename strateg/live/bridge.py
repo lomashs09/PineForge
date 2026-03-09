@@ -1,0 +1,311 @@
+"""Live trading bridge — main loop that connects strategy signals to real execution."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import signal
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from ..lexer import Lexer
+from ..parser import Parser
+from ..interpreter import Interpreter
+from ..series import Series
+from ..broker import Broker
+from ..builtins import math_funcs, ta as ta_module, input_funcs, strategy as strategy_module
+from ..builtins.strategy import get_strategy_context
+from ..builtins.ta import get_ta_state
+
+from .config import LiveConfig
+from .feed import fetch_candles, detect_new_bar, get_latest_closed_bar_time
+from .executor import Executor
+from .risk import RiskManager
+
+logger = logging.getLogger("strateg.live.bridge")
+
+
+class LiveBridge:
+    """Runs a Pine Script strategy live, executing signals on a real broker."""
+
+    def __init__(self, config: LiveConfig):
+        self.config = config
+        self.risk = RiskManager(
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            max_daily_loss_pct=config.max_daily_loss_pct,
+            max_open_positions=config.max_open_positions,
+            cooldown_seconds=config.cooldown_seconds,
+            max_lot_size=config.max_lot_size,
+        )
+        self._shutdown = False
+        self._last_bar_time: str | None = None
+        self._last_signal: str | None = None  # "long", "short", "flat"
+        self._interpreter: Interpreter | None = None
+        self._broker: Broker | None = None
+        self._script_ast = None
+
+        # Built-in series
+        self._open_s = Series()
+        self._high_s = Series()
+        self._low_s = Series()
+        self._close_s = Series()
+        self._volume_s = Series()
+        self._hl2_s = Series()
+        self._hlc3_s = Series()
+        self._ohlc4_s = Series()
+        self._bar_index_s = Series()
+        self._bar_count = 0
+
+    def _init_interpreter(self):
+        """Parse the script and set up the interpreter."""
+        source = Path(self.config.script_path).read_text()
+        tokens = Lexer(source).tokenize()
+        self._script_ast = Parser(tokens).parse()
+
+        interp = Interpreter()
+        self._broker = Broker(initial_capital=10000.0, fill_on="close")
+
+        math_funcs.register(interp)
+        ta_module.register(interp)
+        input_funcs.register(interp)
+        strategy_module.register(interp)
+
+        ctx = get_strategy_context()
+        ctx.set_broker(self._broker)
+        get_ta_state().reset()
+
+        interp.env.define("open", self._open_s)
+        interp.env.define("high", self._high_s)
+        interp.env.define("low", self._low_s)
+        interp.env.define("close", self._close_s)
+        interp.env.define("volume", self._volume_s)
+        interp.env.define("hl2", self._hl2_s)
+        interp.env.define("hlc3", self._hlc3_s)
+        interp.env.define("ohlc4", self._ohlc4_s)
+        interp.env.define("bar_index", self._bar_index_s)
+
+        interp.load_script(self._script_ast)
+        self._interpreter = interp
+
+    def _feed_bar(self, bar: dict[str, Any]):
+        """Push one bar through the interpreter and detect signals."""
+        o, h, l, c = bar["open"], bar["high"], bar["low"], bar["close"]
+        v = bar.get("volume", 0)
+
+        self._open_s.push(o)
+        self._high_s.push(h)
+        self._low_s.push(l)
+        self._close_s.push(c)
+        self._volume_s.push(v)
+        self._hl2_s.push((h + l) / 2)
+        self._hlc3_s.push((h + l + c) / 3)
+        self._ohlc4_s.push((o + h + l + c) / 4)
+        self._bar_index_s.push(self._bar_count)
+
+        ctx = get_strategy_context()
+        ctx.bar_index = self._bar_count
+
+        self._broker.pending_orders.clear()
+        self._interpreter.execute_bar(self._bar_count)
+        self._bar_count += 1
+
+    def _detect_signal(self) -> str | None:
+        """Check what the strategy wants to do after the latest bar.
+
+        Returns "entry_long", "entry_short", "close", or None.
+        """
+        if not self._broker.pending_orders:
+            return None
+
+        for order in self._broker.pending_orders:
+            if order.action == "entry":
+                if order.direction == "long":
+                    return "entry_long"
+                else:
+                    return "entry_short"
+            if order.action in ("close", "close_all"):
+                return "close"
+
+        return None
+
+    async def run(self):
+        """Main live trading loop."""
+        from metaapi_cloud_sdk import MetaApi
+
+        cfg = self.config
+        mode_str = "LIVE" if cfg.is_live else "DRY RUN"
+
+        print("=" * 60)
+        print(f"  Strateg Live Trading Bridge ({mode_str})")
+        print("=" * 60)
+        print(f"  Script:    {Path(cfg.script_path).name}")
+        print(f"  Symbol:    {cfg.symbol}")
+        print(f"  Timeframe: {cfg.timeframe}")
+        print(f"  Lot size:  {cfg.lot_size}")
+        print(f"  Poll:      every {cfg.poll_interval_seconds}s")
+        if not cfg.is_live:
+            print()
+            print("  ** DRY RUN — no real orders will be placed **")
+            print("  ** Add --live flag to enable real trading **")
+        print("=" * 60)
+        print()
+
+        # Connect to MetaAPI
+        print("Connecting to MetaAPI...")
+        api = MetaApi(token=cfg.metaapi_token)
+        account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+
+        print(f"Account state: {account.state}, connection: {account.connection_status}")
+
+        if account.state not in ("DEPLOYING", "DEPLOYED"):
+            try:
+                print("Deploying MT5 account...")
+                await account.deploy()
+            except Exception as e:
+                print(f"Deploy note: {e}")
+                print("Continuing — account may already be provisioned...")
+
+        print("Waiting for MT5 connection...")
+        try:
+            await account.wait_connected(timeout_in_seconds=60)
+        except Exception as e:
+            print(f"Connection timeout: {e}")
+            print("Retrying with account reload...")
+            account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+            print(f"Account state: {account.state}, connection: {account.connection_status}")
+            await account.wait_connected(timeout_in_seconds=120)
+
+        connection = account.get_rpc_connection()
+        await connection.connect()
+        await connection.wait_synchronized(timeout_in_seconds=120)
+        print("Connected to MT5 account.\n")
+
+        executor = Executor(connection, cfg.symbol, cfg.is_live)
+
+        # Get initial account info
+        acct_info = await executor.get_account_info()
+        if acct_info:
+            balance = acct_info.get("balance", 0)
+            print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}")
+            self.risk.reset_daily(balance)
+        print()
+
+        # Initialize the Pine interpreter
+        self._init_interpreter()
+
+        # Warm up: fetch historical bars and run the strategy on them
+        print(f"Fetching {cfg.lookback_bars} historical bars for warmup...")
+        bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        if len(bars) < 10:
+            print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr)
+            return
+
+        # Feed historical bars through the interpreter (warmup — no execution)
+        for bar in bars[:-1]:  # exclude the currently forming bar
+            self._feed_bar(bar)
+        self._last_bar_time = get_latest_closed_bar_time(bars)
+        self._broker.pending_orders.clear()
+
+        print(f"Warmup complete: {self._bar_count} bars loaded.")
+        print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...\n")
+
+        # Register graceful shutdown
+        self._setup_signal_handlers()
+
+        # Main loop
+        while not self._shutdown:
+            try:
+                await self._poll_cycle(account, executor, cfg)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                logger.error("Error in poll cycle: %s", e, exc_info=True)
+                print(f"  [ERROR] {e}")
+
+            await asyncio.sleep(cfg.poll_interval_seconds)
+
+        # Shutdown
+        print("\nShutting down...")
+        await connection.close()
+        print("Disconnected. Goodbye.")
+
+    async def _poll_cycle(self, account, executor: Executor, cfg: LiveConfig):
+        """One iteration of the main loop."""
+        bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        if not bars:
+            return
+
+        if not detect_new_bar(bars, self._last_bar_time):
+            return
+
+        new_bar_time = get_latest_closed_bar_time(bars)
+        latest_closed = bars[-2]  # most recent fully closed bar
+
+        self._last_bar_time = new_bar_time
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{now}] New bar: O={latest_closed['open']:.2f} H={latest_closed['high']:.2f} "
+              f"L={latest_closed['low']:.2f} C={latest_closed['close']:.2f}")
+
+        # Feed the new bar through the strategy
+        self._feed_bar(latest_closed)
+        signal = self._detect_signal()
+
+        if signal is None:
+            print("  No signal.")
+            return
+
+        print(f"  Signal: {signal.upper()}")
+
+        # Get current positions
+        positions = await executor.get_positions()
+        has_position = len(positions) > 0
+
+        if signal == "entry_long":
+            if has_position:
+                print("  Already in position, skipping entry.")
+                return
+
+            allowed, reason = self.risk.check_can_trade(len(positions))
+            if not allowed:
+                print(f"  Risk blocked: {reason}")
+                return
+
+            result = await executor.open_buy(cfg.lot_size)
+            if result:
+                self.risk.record_trade_opened()
+
+        elif signal == "entry_short":
+            if has_position:
+                print("  Already in position, skipping entry.")
+                return
+
+            allowed, reason = self.risk.check_can_trade(len(positions))
+            if not allowed:
+                print(f"  Risk blocked: {reason}")
+                return
+
+            result = await executor.open_sell(cfg.lot_size)
+            if result:
+                self.risk.record_trade_opened()
+
+        elif signal == "close":
+            if not has_position and cfg.is_live:
+                print("  No position to close.")
+                return
+            await executor.close_all()
+
+    def _setup_signal_handlers(self):
+        """Handle Ctrl+C gracefully."""
+        def _handler(signum, frame):
+            print("\n\nReceived shutdown signal...")
+            self._shutdown = True
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)
+
+
+async def run_live(config: LiveConfig):
+    """Entry point for the live trading bridge."""
+    bridge = LiveBridge(config)
+    await bridge.run()
