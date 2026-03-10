@@ -146,6 +146,9 @@ def _run_live(args: argparse.Namespace) -> None:
         ],
     )
 
+    for noisy in ("engineio", "socketio", "httpx", "urllib3", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     script_path = Path(args.script)
     if not script_path.exists():
         print(f"Error: Script file not found: {script_path}", file=sys.stderr)

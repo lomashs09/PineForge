@@ -137,84 +137,77 @@ class LiveBridge:
         cfg = self.config
         mode_str = "LIVE" if cfg.is_live else "DRY RUN"
 
-        print("=" * 60)
-        print(f"  PineForge Live Trading Bridge ({mode_str})")
-        print("=" * 60)
-        print(f"  Script:    {Path(cfg.script_path).name}")
-        print(f"  Symbol:    {cfg.symbol}")
-        print(f"  Timeframe: {cfg.timeframe}")
-        print(f"  Lot size:  {cfg.lot_size}")
-        print(f"  Poll:      every {cfg.poll_interval_seconds}s")
+        print("=" * 60, flush=True)
+        print(f"  PineForge Live Trading Bridge ({mode_str})", flush=True)
+        print("=" * 60, flush=True)
+        print(f"  Script:    {Path(cfg.script_path).name}", flush=True)
+        print(f"  Symbol:    {cfg.symbol}", flush=True)
+        print(f"  Timeframe: {cfg.timeframe}", flush=True)
+        print(f"  Lot size:  {cfg.lot_size}", flush=True)
+        print(f"  Poll:      every {cfg.poll_interval_seconds}s", flush=True)
         if not cfg.is_live:
-            print()
-            print("  ** DRY RUN — no real orders will be placed **")
-            print("  ** Add --live flag to enable real trading **")
-        print("=" * 60)
-        print()
+            print(flush=True)
+            print("  ** DRY RUN — no real orders will be placed **", flush=True)
+            print("  ** Add --live flag to enable real trading **", flush=True)
+        print("=" * 60, flush=True)
+        print(flush=True)
 
-        # Connect to MetaAPI
-        print("Connecting to MetaAPI...")
+        print("Connecting to MetaAPI...", flush=True)
         api = MetaApi(token=cfg.metaapi_token)
         account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
 
-        print(f"Account state: {account.state}, connection: {account.connection_status}")
+        print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
 
         if account.state not in ("DEPLOYING", "DEPLOYED"):
             try:
-                print("Deploying MT5 account...")
+                print("Deploying MT5 account...", flush=True)
                 await account.deploy()
             except Exception as e:
-                print(f"Deploy note: {e}")
-                print("Continuing — account may already be provisioned...")
+                print(f"Deploy note: {e}", flush=True)
+                print("Continuing — account may already be provisioned...", flush=True)
 
-        print("Waiting for MT5 connection...")
+        print("Waiting for MT5 connection...", flush=True)
         try:
             await account.wait_connected(timeout_in_seconds=60)
         except Exception as e:
-            print(f"Connection timeout: {e}")
-            print("Retrying with account reload...")
+            print(f"Connection timeout: {e}", flush=True)
+            print("Retrying with account reload...", flush=True)
             account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
-            print(f"Account state: {account.state}, connection: {account.connection_status}")
+            print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
             await account.wait_connected(timeout_in_seconds=120)
 
         connection = account.get_rpc_connection()
         await connection.connect()
         await connection.wait_synchronized(timeout_in_seconds=120)
-        print("Connected to MT5 account.\n")
+        print("Connected to MT5 account.\n", flush=True)
 
         executor = Executor(connection, cfg.symbol, cfg.is_live)
 
-        # Get initial account info
         acct_info = await executor.get_account_info()
         if acct_info:
             balance = acct_info.get("balance", 0)
-            print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}")
+            print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}", flush=True)
             self.risk.reset_daily(balance)
-        print()
+        print(flush=True)
 
-        # Initialize the Pine interpreter
         self._init_interpreter()
 
-        # Warm up: fetch historical bars and run the strategy on them
-        print(f"Fetching {cfg.lookback_bars} historical bars for warmup...")
+        print(f"Fetching {cfg.lookback_bars} historical bars for warmup...", flush=True)
         bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if len(bars) < 10:
-            print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr)
+            print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr, flush=True)
             return
 
-        # Feed historical bars through the interpreter (warmup — no execution)
-        for bar in bars[:-1]:  # exclude the currently forming bar
+        for bar in bars[:-1]:
             self._feed_bar(bar)
         self._last_bar_time = get_latest_closed_bar_time(bars)
         self._broker.pending_orders.clear()
 
-        print(f"Warmup complete: {self._bar_count} bars loaded.")
-        print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...\n")
+        print(f"Warmup complete: {self._bar_count} bars loaded.", flush=True)
+        print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...\n", flush=True)
 
-        # Register graceful shutdown
         self._setup_signal_handlers()
 
-        # Main loop
         while not self._shutdown:
             try:
                 await self._poll_cycle(account, executor, cfg)
@@ -222,14 +215,13 @@ class LiveBridge:
                 break
             except Exception as e:
                 logger.error("Error in poll cycle: %s", e, exc_info=True)
-                print(f"  [ERROR] {e}")
+                print(f"  [ERROR] {e}", flush=True)
 
             await asyncio.sleep(cfg.poll_interval_seconds)
 
-        # Shutdown
-        print("\nShutting down...")
+        print("\nShutting down...", flush=True)
         await connection.close()
-        print("Disconnected. Goodbye.")
+        print("Disconnected. Goodbye.", flush=True)
 
     async def _poll_cycle(self, account, executor: Executor, cfg: LiveConfig):
         """One iteration of the main loop."""
@@ -246,30 +238,28 @@ class LiveBridge:
         self._last_bar_time = new_bar_time
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{now}] New bar: O={latest_closed['open']:.2f} H={latest_closed['high']:.2f} "
-              f"L={latest_closed['low']:.2f} C={latest_closed['close']:.2f}")
+              f"L={latest_closed['low']:.2f} C={latest_closed['close']:.2f}", flush=True)
 
-        # Feed the new bar through the strategy
         self._feed_bar(latest_closed)
         signal = self._detect_signal()
 
         if signal is None:
-            print("  No signal.")
+            print("  No signal.", flush=True)
             return
 
-        print(f"  Signal: {signal.upper()}")
+        print(f"  Signal: {signal.upper()}", flush=True)
 
-        # Get current positions
         positions = await executor.get_positions()
         has_position = len(positions) > 0
 
         if signal == "entry_long":
             if has_position:
-                print("  Already in position, skipping entry.")
+                print("  Already in position, skipping entry.", flush=True)
                 return
 
             allowed, reason = self.risk.check_can_trade(len(positions))
             if not allowed:
-                print(f"  Risk blocked: {reason}")
+                print(f"  Risk blocked: {reason}", flush=True)
                 return
 
             result = await executor.open_buy(cfg.lot_size)
@@ -278,12 +268,12 @@ class LiveBridge:
 
         elif signal == "entry_short":
             if has_position:
-                print("  Already in position, skipping entry.")
+                print("  Already in position, skipping entry.", flush=True)
                 return
 
             allowed, reason = self.risk.check_can_trade(len(positions))
             if not allowed:
-                print(f"  Risk blocked: {reason}")
+                print(f"  Risk blocked: {reason}", flush=True)
                 return
 
             result = await executor.open_sell(cfg.lot_size)
@@ -292,14 +282,14 @@ class LiveBridge:
 
         elif signal == "close":
             if not has_position and cfg.is_live:
-                print("  No position to close.")
+                print("  No position to close.", flush=True)
                 return
             await executor.close_all()
 
     def _setup_signal_handlers(self):
         """Handle Ctrl+C gracefully."""
         def _handler(signum, frame):
-            print("\n\nReceived shutdown signal...")
+            print("\n\nReceived shutdown signal...", flush=True)
             self._shutdown = True
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)
