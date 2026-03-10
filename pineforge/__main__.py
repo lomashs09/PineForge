@@ -137,6 +137,9 @@ def _run_live(args: argparse.Namespace) -> None:
     from .live.config import load_config
     from .live.bridge import run_live
 
+    from metaapi_cloud_sdk.logger import LoggerManager
+    LoggerManager.use_logging()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -146,8 +149,17 @@ def _run_live(args: argparse.Namespace) -> None:
         ],
     )
 
-    for noisy in ("engineio", "socketio", "httpx", "urllib3", "httpcore"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    noisy_loggers = [
+        "engineio", "socketio", "httpx", "urllib3", "httpcore",
+        "SubscriptionManager", "MetaApiWebsocketClient", "MetaApiConnection",
+        "MetaApiConnectionInstance", "RpcMetaApiConnection",
+        "RpcMetaApiConnectionInstance", "StreamingMetaApiConnectionInstance",
+        "ConnectionHealthMonitor", "SynchronizationThrottler",
+        "TerminalState", "DomainClient", "ClientApiClient", "HttpClient",
+        "LatencyService", "PacketLogger",
+    ]
+    for name in noisy_loggers:
+        logging.getLogger(name).setLevel(logging.CRITICAL)
 
     script_path = Path(args.script)
     if not script_path.exists():
