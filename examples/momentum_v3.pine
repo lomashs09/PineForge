@@ -1,19 +1,21 @@
 //@version=5
-strategy("Momentum ROC", overlay=true)
+strategy("Momentum ROC v3 - RSI Filter Only", overlay=true)
 
 roc_len = input.int(20, "ROC Length")
 sma_len = input.int(50, "SMA Filter Length")
+rsi_len = input.int(14, "RSI Length")
 
 momentum = ta.change(close, roc_len)
 trend_filter = ta.sma(close, sma_len)
+rsi_val = ta.rsi(close, rsi_len)
 
-if momentum > 0 and close > trend_filter
+if momentum > 0 and close > trend_filter and rsi_val < 75
     strategy.entry("Long", strategy.long)
 
 if momentum < 0
     strategy.close("Long")
 
-if momentum < 0 and close < trend_filter
+if momentum < 0 and close < trend_filter and rsi_val > 25
     strategy.entry("Short", strategy.short)
 
 if momentum > 0

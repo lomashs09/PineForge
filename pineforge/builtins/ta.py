@@ -255,3 +255,45 @@ def register(interpreter) -> None:
     }
     for name, fn in funcs.items():
         interpreter.register_builtin(name, fn)
+
+
+def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series) -> None:
+    """Register indicators that depend on OHLCV series (ta.tr, ta.atr)."""
+
+    _atr_state: dict[int, float] = {}
+
+    def _ta_tr_wrapper() -> float:
+        return ta_tr(high_s, low_s, close_s)
+
+    def _ta_atr_wrapper(length: Any) -> float:
+        length = int(_unwrap(length))
+        tr_val = ta_tr(high_s, low_s, close_s)
+        if is_na(tr_val):
+            return na_value()
+
+        alpha = 1.0 / length
+        state_key = length
+
+        if state_key not in _atr_state:
+            if len(close_s) < length + 1:
+                return na_value()
+            tr_vals = []
+            for i in range(length):
+                h, l = high_s[i], low_s[i]
+                if len(close_s) > i + 1:
+                    pc = close_s[i + 1]
+                else:
+                    pc = na_value()
+                if any(is_na(v) for v in (h, l, pc)):
+                    return na_value()
+                tr_vals.append(max(h - l, abs(h - pc), abs(l - pc)))
+            _atr_state[state_key] = sum(tr_vals) / length
+            return _atr_state[state_key]
+
+        prev = _atr_state[state_key]
+        result = alpha * tr_val + (1 - alpha) * prev
+        _atr_state[state_key] = result
+        return result
+
+    interpreter.register_builtin("ta.tr", _ta_tr_wrapper)
+    interpreter.register_builtin("ta.atr", _ta_atr_wrapper)

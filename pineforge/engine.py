@@ -14,7 +14,7 @@ from .data import DataFeed
 from .results import BacktestResult, compute_results
 from .builtins import math_funcs, ta as ta_module, input_funcs, strategy as strategy_module
 from .builtins.strategy import get_strategy_context
-from .builtins.ta import get_ta_state
+from .builtins.ta import get_ta_state, register_ohlcv
 
 
 class Engine:
@@ -77,6 +77,8 @@ class Engine:
 
         bar_index_s = Series()
         interp.env.define("bar_index", bar_index_s)
+
+        register_ohlcv(interp, high_s, low_s, close_s)
 
         interp.load_script(ast)
 

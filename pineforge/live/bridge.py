@@ -17,7 +17,7 @@ from ..series import Series
 from ..broker import Broker
 from ..builtins import math_funcs, ta as ta_module, input_funcs, strategy as strategy_module
 from ..builtins.strategy import get_strategy_context
-from ..builtins.ta import get_ta_state
+from ..builtins.ta import get_ta_state, register_ohlcv
 
 from .config import LiveConfig
 from .feed import fetch_candles, detect_new_bar, get_latest_closed_bar_time
@@ -45,6 +45,9 @@ class LiveBridge:
         self._interpreter: Interpreter | None = None
         self._broker: Broker | None = None
         self._script_ast = None
+        self._start_time: datetime | None = None
+        self._poll_count = 0
+        self._last_heartbeat: datetime | None = None
 
         # Built-in series
         self._open_s = Series()
@@ -86,6 +89,8 @@ class LiveBridge:
         interp.env.define("ohlc4", self._ohlc4_s)
         interp.env.define("bar_index", self._bar_index_s)
 
+        register_ohlcv(interp, self._high_s, self._low_s, self._close_s)
+
         interp.load_script(self._script_ast)
         self._interpreter = interp
 
@@ -115,20 +120,20 @@ class LiveBridge:
         """Check what the strategy wants to do after the latest bar.
 
         Returns "entry_long", "entry_short", "close", or None.
+        Entries take priority over closes because in Pine Script an entry in
+        the opposite direction automatically closes the current position.
         """
         if not self._broker.pending_orders:
             return None
 
+        has_close = False
         for order in self._broker.pending_orders:
             if order.action == "entry":
-                if order.direction == "long":
-                    return "entry_long"
-                else:
-                    return "entry_short"
+                return "entry_long" if order.direction == "long" else "entry_short"
             if order.action in ("close", "close_all"):
-                return "close"
+                has_close = True
 
-        return None
+        return "close" if has_close else None
 
     async def run(self):
         """Main live trading loop."""
@@ -207,6 +212,8 @@ class LiveBridge:
         print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...\n", flush=True)
 
         self._setup_signal_handlers()
+        self._start_time = datetime.now(timezone.utc)
+        self._last_heartbeat = self._start_time
 
         while not self._shutdown:
             try:
@@ -217,11 +224,26 @@ class LiveBridge:
                 logger.error("Error in poll cycle: %s", e, exc_info=True)
                 print(f"  [ERROR] {e}", flush=True)
 
+            self._poll_count += 1
+            self._print_heartbeat_if_due()
             await asyncio.sleep(cfg.poll_interval_seconds)
 
         print("\nShutting down...", flush=True)
         await connection.close()
         print("Disconnected. Goodbye.", flush=True)
+
+    def _print_heartbeat_if_due(self):
+        """Print a status line every hour so you can verify the server is alive."""
+        now = datetime.now(timezone.utc)
+        if (now - self._last_heartbeat).total_seconds() < 3600:
+            return
+        self._last_heartbeat = now
+        uptime = now - self._start_time
+        hours = int(uptime.total_seconds() // 3600)
+        minutes = int((uptime.total_seconds() % 3600) // 60)
+        ts = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"[{ts}] HEARTBEAT | uptime: {hours}h {minutes}m | polls: {self._poll_count} | "
+              f"bars processed: {self._bar_count}", flush=True)
 
     async def _poll_cycle(self, account, executor: Executor, cfg: LiveConfig):
         """One iteration of the main loop."""
@@ -254,10 +276,15 @@ class LiveBridge:
 
         if signal == "entry_long":
             if has_position:
-                print("  Already in position, skipping entry.", flush=True)
-                return
+                pos_type = positions[0].get("type", "")
+                if pos_type == "POSITION_TYPE_SELL":
+                    print("  Flipping: closing SHORT -> opening LONG", flush=True)
+                    await executor.close_all()
+                else:
+                    print("  Already LONG, skipping entry.", flush=True)
+                    return
 
-            allowed, reason = self.risk.check_can_trade(len(positions))
+            allowed, reason = self.risk.check_can_trade(0)
             if not allowed:
                 print(f"  Risk blocked: {reason}", flush=True)
                 return
@@ -268,10 +295,15 @@ class LiveBridge:
 
         elif signal == "entry_short":
             if has_position:
-                print("  Already in position, skipping entry.", flush=True)
-                return
+                pos_type = positions[0].get("type", "")
+                if pos_type == "POSITION_TYPE_BUY":
+                    print("  Flipping: closing LONG -> opening SHORT", flush=True)
+                    await executor.close_all()
+                else:
+                    print("  Already SHORT, skipping entry.", flush=True)
+                    return
 
-            allowed, reason = self.risk.check_can_trade(len(positions))
+            allowed, reason = self.risk.check_can_trade(0)
             if not allowed:
                 print(f"  Risk blocked: {reason}", flush=True)
                 return

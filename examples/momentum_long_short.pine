@@ -1,5 +1,5 @@
 //@version=5
-strategy("Momentum ROC", overlay=true)
+strategy("Momentum ROC Long+Short", overlay=true)
 
 roc_len = input.int(20, "ROC Length")
 sma_len = input.int(50, "SMA Filter Length")

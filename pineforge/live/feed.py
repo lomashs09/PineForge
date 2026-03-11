@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -31,7 +32,14 @@ async def fetch_candles(account, symbol: str, timeframe: str, limit: int = 200) 
     Returns:
         List of bar dicts with open/high/low/close/volume/date keys.
     """
-    candles = await account.get_historical_candles(symbol, timeframe, limit=min(limit, 1000))
+    try:
+        candles = await asyncio.wait_for(
+            account.get_historical_candles(symbol, timeframe, limit=min(limit, 1000)),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Candle fetch timed out after 30s")
+        return []
 
     if not candles:
         logger.warning("No candles returned from MetaAPI for %s %s", symbol, timeframe)
