@@ -41,7 +41,7 @@ class LiveBridge:
         )
         self._shutdown = False
         self._last_bar_time: str | None = None
-        self._last_signal: str | None = None  # "long", "short", "flat"
+        self._pending_signal: str | None = None
         self._interpreter: Interpreter | None = None
         self._broker: Broker | None = None
         self._script_ast = None
@@ -207,9 +207,11 @@ class LiveBridge:
             self._feed_bar(bar)
         self._last_bar_time = get_latest_closed_bar_time(bars)
         self._broker.pending_orders.clear()
+        self._pending_signal = None
 
         print(f"Warmup complete: {self._bar_count} bars loaded.", flush=True)
-        print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...\n", flush=True)
+        print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...", flush=True)
+        print(f"  Execution mode: NEXT BAR OPEN (signal queued, executed on next bar)\n", flush=True)
 
         self._setup_signal_handlers()
         self._start_time = datetime.now(timezone.utc)
@@ -246,7 +248,14 @@ class LiveBridge:
               f"bars processed: {self._bar_count}", flush=True)
 
     async def _poll_cycle(self, account, executor: Executor, cfg: LiveConfig):
-        """One iteration of the main loop."""
+        """One iteration of the main loop.
+
+        Uses "next open" execution: when a new bar arrives, first execute the
+        signal from the *previous* bar (at the current bar's opening price),
+        then compute the new signal and save it for the next bar.  This matches
+        the default backtest fill mode (fill_on="next_open") and avoids
+        same-bar stop-outs that kill profitability.
+        """
         bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if not bars:
             return
@@ -262,15 +271,24 @@ class LiveBridge:
         print(f"[{now}] New bar: O={latest_closed['open']:.2f} H={latest_closed['high']:.2f} "
               f"L={latest_closed['low']:.2f} C={latest_closed['close']:.2f}", flush=True)
 
+        # --- Step 1: Execute the PREVIOUS bar's signal at this bar's open ---
+        if self._pending_signal is not None:
+            print(f"  Executing queued signal: {self._pending_signal.upper()}", flush=True)
+            await self._execute_signal(self._pending_signal, executor, cfg)
+            self._pending_signal = None
+
+        # --- Step 2: Feed this bar and compute the NEW signal (saved for next bar) ---
         self._feed_bar(latest_closed)
         signal = self._detect_signal()
 
         if signal is None:
-            print("  No signal.", flush=True)
-            return
+            print("  No new signal.", flush=True)
+        else:
+            print(f"  Signal queued for next bar: {signal.upper()}", flush=True)
+            self._pending_signal = signal
 
-        print(f"  Signal: {signal.upper()}", flush=True)
-
+    async def _execute_signal(self, signal: str, executor: Executor, cfg: LiveConfig):
+        """Place orders for a previously queued signal."""
         positions = await executor.get_positions()
         has_position = len(positions) > 0
 
