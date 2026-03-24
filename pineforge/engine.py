@@ -87,6 +87,21 @@ class Engine:
         for i in range(total_bars):
             bar = data[i]
 
+            # STEP 1: Fill pending orders from the PREVIOUS bar.
+            # For next_open mode, orders must fill at this bar's open
+            # BEFORE the script runs, so the strategy cannot act on
+            # prices it hasn't seen yet.
+            if self.fill_on == "next_open" and i > 0:
+                broker.process_orders(
+                    bar_index=i,
+                    open_price=bar["open"],
+                    high_price=bar["high"],
+                    low_price=bar["low"],
+                    close_price=bar["close"],
+                    date=bar.get("date"),
+                )
+
+            # STEP 2: Push current bar data and execute the script.
             open_s.push(bar["open"])
             high_s.push(bar["high"])
             low_s.push(bar["low"])
@@ -100,7 +115,8 @@ class Engine:
             ctx.bar_index = i
             interp.execute_bar(i)
 
-            if i > 0 or self.fill_on == "close":
+            # STEP 3: For close mode, fill orders at the same bar's close.
+            if self.fill_on == "close":
                 broker.process_orders(
                     bar_index=i,
                     open_price=bar["open"],
@@ -109,7 +125,9 @@ class Engine:
                     close_price=bar["close"],
                     date=bar.get("date"),
                 )
-            else:
+            elif i == 0:
+                # Bar 0 in next_open mode: no orders to process yet,
+                # but we still need to record the equity snapshot.
                 broker._update_equity(bar["close"])
 
         if broker.position is not None:
