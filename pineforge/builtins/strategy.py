@@ -72,7 +72,9 @@ def strategy_declare(title: Any = "Strategy", **kwargs) -> None:
 def strategy_entry(id: Any, direction: Any, qty: Any = None, **_kwargs) -> None:
     if _ctx.broker is None:
         return
-    from ..series import is_na
+    from ..series import Series, is_na
+    if isinstance(qty, Series):
+        qty = qty.current
     q = float(qty) if qty is not None and not is_na(qty) else _ctx.default_qty_value
     _ctx.broker.submit_entry(str(id), str(direction), q, _ctx.bar_index)
 

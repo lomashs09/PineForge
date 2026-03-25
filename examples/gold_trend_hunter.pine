@@ -1,0 +1,51 @@
+//@version=5
+strategy("Gold Trend Hunter V2", overlay=true, default_qty_value=3)
+
+// ==========================================================
+// GOLD TREND HUNTER V2 — Donchian Channel Breakout + EMA Filter
+//
+// Designed for XAUUSD on 1h timeframe.
+// V2: Optimized parameters — wider exit (10 vs 7) lets winners
+// run longer, faster EMA (44 vs 50) detects trend shifts sooner.
+// ==========================================================
+
+breakout_len = input.int(15, "Breakout Lookback")
+exit_len = input.int(10, "Exit Lookback")
+ema_len = input.int(44, "EMA Trend Filter")
+
+upper = ta.highest(high, breakout_len)
+lower = ta.lowest(low, breakout_len)
+exit_high = ta.highest(high, exit_len)
+exit_low = ta.lowest(low, exit_len)
+ema = ta.ema(close, ema_len)
+
+prev_upper = nz(upper[1], 99999)
+prev_lower = nz(lower[1], 0)
+
+var trade_dir = 0
+
+// Long breakout: close above previous 15-bar high + above EMA
+long_break = close > prev_upper and close > nz(ema, 0)
+if long_break and trade_dir != 1
+    strategy.entry("Long", strategy.long)
+    trade_dir := 1
+
+// Short breakout: close below previous 15-bar low + below EMA
+short_break = close < prev_lower and close < nz(ema, 0)
+if short_break and trade_dir != -1
+    strategy.entry("Short", strategy.short)
+    trade_dir := -1
+
+// Exit long when price drops to 10-bar low
+if trade_dir == 1
+    exit_level = nz(exit_low[1], 0)
+    if close < exit_level
+        strategy.close("Long")
+        trade_dir := 0
+
+// Exit short when price rises to 10-bar high
+if trade_dir == -1
+    exit_level = nz(exit_high[1], 99999)
+    if close > exit_level
+        strategy.close("Short")
+        trade_dir := 0
