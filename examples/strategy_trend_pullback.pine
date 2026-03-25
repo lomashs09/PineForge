@@ -1,0 +1,54 @@
+//@version=5
+strategy("Trend Pullback V2", overlay=true, default_qty_value=0.01)
+
+// === PARAMETERS ===
+trend_ema_len = input.int(50, "Trend EMA")
+fast_ema_len = input.int(10, "Fast EMA")
+rsi_len = input.int(7, "RSI Length")
+rsi_pullback = input.int(40, "RSI Pullback Level")
+atr_len = input.int(14, "ATR Length")
+atr_stop_mult = input.float(2.0, "ATR Stop Mult")
+atr_profit_mult = input.float(3.0, "ATR Profit Mult")
+
+// === INDICATORS ===
+ema_trend = ta.ema(close, trend_ema_len)
+ema_fast = ta.ema(close, fast_ema_len)
+rsi = ta.rsi(close, rsi_len)
+atr = ta.atr(atr_len)
+
+// === TREND CONFIRMATION (Relaxed) ===
+// Price above trend EMA and EMA rising
+above_trend = close > nz(ema_trend, 0)
+trend_rising = nz(ema_trend, 0) > nz(ema_trend[3], 0)
+in_uptrend = above_trend and trend_rising
+
+// === PULLBACK DETECTION ===
+// RSI dips below threshold = pullback in progress
+is_pullback = rsi < rsi_pullback
+
+// RSI starts recovering
+rsi_turns_up = rsi > rsi[1] and rsi[1] < rsi_pullback + 5
+
+// Price still supported by fast EMA or trend EMA
+price_supported = close > nz(ema_trend, 0) * 0.98
+
+// === ENTRY ===
+var entry_price = 0.0
+
+if in_uptrend and is_pullback and rsi_turns_up and price_supported and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    entry_price := close
+
+// === EXIT ===
+if strategy.position_size > 0
+    stop_price = entry_price - nz(atr, 10) * atr_stop_mult
+    target_price = entry_price + nz(atr, 10) * atr_profit_mult
+
+    hit_stop = close < stop_price
+    hit_target = close > target_price
+    trend_broken = close < nz(ema_trend, 0) * 0.97
+    rsi_exhausted = rsi > 78
+
+    if hit_stop or hit_target or trend_broken or rsi_exhausted
+        strategy.close("Long")
+        entry_price := 0.0

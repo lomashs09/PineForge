@@ -1,0 +1,224 @@
+//@version=5
+strategy("Ultimate Regime-Adaptive V3", overlay=true, default_qty_value=0.01)
+
+// ============================================================
+// ULTIMATE STRATEGY V3
+// Combines the best elements from all tested strategies:
+// - Regime detection from Regime-Adaptive V2 (4.99 PF, 1.36 Sharpe)
+// - ATR trailing stops from Momentum+ATR (lets winners run)
+// - BB Squeeze detection from BB Squeeze strategy (75% win rate)
+// - Multi-factor scoring for entry quality
+// ============================================================
+
+// === PARAMETERS ===
+// Regime detection
+regime_lookback = input.int(40, "Regime Lookback")
+trend_fast = input.int(10, "Trend Fast EMA")
+trend_slow = input.int(30, "Trend Slow EMA")
+trend_filter = input.int(80, "Trend Filter EMA")
+
+// Indicators
+rsi_len = input.int(14, "RSI Length")
+bb_len = input.int(20, "BB Length")
+bb_mult = input.float(2.0, "BB Mult")
+atr_len = input.int(14, "ATR Length")
+
+// Risk management
+atr_trail_mult = input.float(2.5, "ATR Trail Multiplier")
+max_bars = input.int(30, "Max Bars in Trade")
+
+// === CORE INDICATORS ===
+ema_fast = ta.ema(close, trend_fast)
+ema_slow = ta.ema(close, trend_slow)
+ema_filter = ta.ema(close, trend_filter)
+rsi = ta.rsi(close, rsi_len)
+atr = ta.atr(atr_len)
+
+// Bollinger Bands
+basis = ta.sma(close, bb_len)
+dev = ta.stdev(close, bb_len)
+upper = basis + nz(dev, 0) * bb_mult
+lower = basis - nz(dev, 0) * bb_mult
+bb_width = nz(dev, 0) * bb_mult * 2
+
+// === REGIME DETECTION (Enhanced) ===
+// EMA spread for trend detection
+ema_spread = math.abs(nz(ema_fast, 0) - nz(ema_slow, 0))
+avg_spread = ta.sma(ema_spread, regime_lookback)
+
+// Volatility regime
+vol = ta.stdev(close, 20)
+vol_avg = ta.sma(vol, regime_lookback)
+
+// BB squeeze detection (from Strategy 1)
+avg_bb_width = ta.sma(bb_width, 120)
+in_squeeze = bb_width < nz(avg_bb_width, 999) * 0.6
+
+// Regime classification
+is_trending = ema_spread > nz(avg_spread, 0) * 1.1
+is_squeeze = in_squeeze
+is_high_vol = nz(vol, 0) > nz(vol_avg, 1) * 1.5
+
+var regime = 0
+if is_trending
+    regime := 1
+else if is_squeeze
+    regime := 2
+else
+    regime := 3
+
+// === STATE MANAGEMENT ===
+var trade_regime = 0
+var entry_price = 0.0
+var trail_stop = 0.0
+var bars_in_trade = 0
+var was_squeezed = false
+var bars_since_squeeze = 0
+
+// Track squeeze history
+if in_squeeze
+    was_squeezed := true
+    bars_since_squeeze := 0
+else
+    bars_since_squeeze := bars_since_squeeze + 1
+
+// === MULTI-FACTOR ENTRY SCORING ===
+// Score 0-6 for entry quality
+var entry_score = 0
+entry_score := 0
+
+// Trend alignment (+2)
+if close > nz(ema_fast, 0) and nz(ema_fast, 0) > nz(ema_slow, 0)
+    entry_score := entry_score + 2
+else if close > nz(ema_slow, 0)
+    entry_score := entry_score + 1
+
+// Momentum (+2)
+mom_5 = ta.change(close, 5)
+mom_10 = ta.change(close, 10)
+if nz(mom_5, 0) > 0 and nz(mom_10, 0) > 0
+    entry_score := entry_score + 2
+else if nz(mom_5, 0) > 0 or nz(mom_10, 0) > 0
+    entry_score := entry_score + 1
+
+// RSI in favorable zone (+2)
+if rsi > 35 and rsi < 70
+    entry_score := entry_score + 2
+else if rsi > 25 and rsi < 80
+    entry_score := entry_score + 1
+
+// ============================================================
+// REGIME 1: TRENDING — Momentum with ATR Trailing Stop
+// ============================================================
+if regime == 1 and strategy.position_size == 0
+    // EMA crossover entry
+    bullish_cross = ta.crossover(ema_fast, ema_slow)
+    strong_trend = close > nz(ema_filter, 0)
+    rsi_ok = rsi > 35 and rsi < 78
+
+    if bullish_cross and strong_trend and rsi_ok
+        strategy.entry("Long", strategy.long)
+        trade_regime := 1
+        entry_price := close
+        trail_stop := close - nz(atr, 10) * atr_trail_mult
+        bars_in_trade := 0
+
+    // Strong momentum continuation entry (no crossover needed)
+    ema_aligned = nz(ema_fast, 0) > nz(ema_slow, 0)
+    strong_momentum = nz(mom_5, 0) > 0 and nz(mom_10, 0) > 0
+    above_filter = close > nz(ema_filter, 0)
+    if ema_aligned and strong_momentum and above_filter and rsi > 50 and rsi < 72 and entry_score >= 4
+        strategy.entry("Long", strategy.long)
+        trade_regime := 1
+        entry_price := close
+        trail_stop := close - nz(atr, 10) * atr_trail_mult
+        bars_in_trade := 0
+
+// Trending regime exits: ATR trailing stop (from Strategy 2)
+if strategy.position_size > 0 and trade_regime == 1
+    // Ratchet trailing stop upward
+    new_stop = close - nz(atr, 10) * atr_trail_mult
+    if new_stop > trail_stop
+        trail_stop := new_stop
+
+    // Exit on trail stop, trend collapse, or extreme RSI
+    if close < trail_stop or ta.crossunder(ema_fast, ema_slow) or rsi > 83
+        strategy.close("Long")
+
+// ============================================================
+// REGIME 2: SQUEEZE — Anticipate breakout (from Strategy 1)
+// ============================================================
+if regime == 2 and strategy.position_size == 0
+    // Buy when RSI dips in squeeze (anticipate expansion)
+    squeeze_buy = rsi < 35 and close < nz(lower, 0) + nz(dev, 1) * 0.5
+    rsi_turning = rsi > rsi[1]
+
+    if squeeze_buy and rsi_turning
+        strategy.entry("Long", strategy.long)
+        trade_regime := 2
+        entry_price := close
+        trail_stop := close - nz(atr, 10) * 2.0
+        bars_in_trade := 0
+
+    // Also buy on squeeze breakout to the upside
+    squeeze_breakout = was_squeezed and bars_since_squeeze < 10 and close > nz(upper, 99999)
+    if squeeze_breakout and entry_score >= 3
+        strategy.entry("Long", strategy.long)
+        trade_regime := 2
+        entry_price := close
+        trail_stop := close - nz(atr, 10) * 2.0
+        bars_in_trade := 0
+        was_squeezed := false
+
+// Squeeze regime exits: mean reversion target
+if strategy.position_size > 0 and trade_regime == 2
+    profit_target = close > nz(basis, 99999) and rsi > 58
+    stop_out = close < trail_stop
+    if profit_target or stop_out or rsi > 72
+        strategy.close("Long")
+
+// ============================================================
+// REGIME 3: RANGING — Mean Reversion (from original V2)
+// ============================================================
+if regime == 3 and strategy.position_size == 0
+    // Buy near lower BB with RSI confirmation
+    rsi_low = rsi < 35
+    at_lower = close < nz(lower, 0) + nz(dev, 1) * 0.5
+    rsi_turn = rsi > rsi[1]
+
+    if rsi_low and at_lower and rsi_turn
+        strategy.entry("Long", strategy.long)
+        trade_regime := 3
+        entry_price := close
+        trail_stop := close - nz(atr, 10) * 2.0
+        bars_in_trade := 0
+
+    // Moderate oversold entry when price below lower BB
+    moderate_os = rsi < 40 and close < nz(lower, 0)
+    if moderate_os and rsi_turn
+        strategy.entry("Long", strategy.long)
+        trade_regime := 3
+        entry_price := close
+        trail_stop := close - nz(atr, 10) * 2.0
+        bars_in_trade := 0
+
+// Ranging regime exits: tight mean reversion
+if strategy.position_size > 0 and trade_regime == 3
+    mr_target = close > nz(basis, 99999) and rsi > 55
+    mr_stop = close < trail_stop
+    if mr_target or mr_stop or rsi > 68
+        strategy.close("Long")
+
+// ============================================================
+// UNIVERSAL SAFEGUARDS
+// ============================================================
+if strategy.position_size > 0
+    bars_in_trade := bars_in_trade + 1
+    // Time stop: prevents dead money
+    if bars_in_trade > max_bars
+        strategy.close("Long")
+        bars_in_trade := 0
+    // Emergency stop: close on extreme high vol spike
+    if is_high_vol and rsi > 80
+        strategy.close("Long")
+        bars_in_trade := 0

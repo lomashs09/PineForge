@@ -1,0 +1,114 @@
+//@version=5
+strategy("Regime-Adaptive V2 Enhanced", overlay=true, default_qty_value=0.01)
+
+// === PARAMETERS ===
+regime_lookback = input.int(40, "Regime Lookback")
+trend_fast = input.int(10, "Trend Fast EMA")
+trend_slow = input.int(30, "Trend Slow EMA")
+trend_filter = input.int(80, "Trend Filter EMA")
+rsi_len = input.int(14, "RSI Length")
+bb_len = input.int(20, "BB Length")
+bb_mult = input.float(2.0, "BB Mult")
+vol_lookback = input.int(20, "Volatility Lookback")
+atr_len = input.int(14, "ATR Length")
+
+// === INDICATORS ===
+ema_fast = ta.ema(close, trend_fast)
+ema_slow = ta.ema(close, trend_slow)
+ema_filter = ta.ema(close, trend_filter)
+rsi = ta.rsi(close, rsi_len)
+atr = ta.atr(atr_len)
+
+// Bollinger Bands
+basis = ta.sma(close, bb_len)
+dev = ta.stdev(close, bb_len)
+upper = basis + nz(dev, 0) * bb_mult
+lower = basis - nz(dev, 0) * bb_mult
+
+// === REGIME DETECTION ===
+ema_spread = math.abs(nz(ema_fast, 0) - nz(ema_slow, 0))
+avg_spread = ta.sma(ema_spread, regime_lookback)
+
+vol = ta.stdev(close, vol_lookback)
+vol_avg = ta.sma(vol, regime_lookback)
+
+// Trending = EMAs diverging significantly
+is_trending = ema_spread > nz(avg_spread, 0) * 1.1
+
+var regime = 0
+if is_trending
+    regime := 1
+else
+    regime := 2
+
+// === STATE ===
+var trade_regime = 0
+var entry_price = 0.0
+var bars_in_trade = 0
+
+// ==========================================
+// REGIME 1: TRENDING — Follow the momentum
+// ==========================================
+if regime == 1
+    // Relaxed crossover conditions
+    bullish = ta.crossover(ema_fast, ema_slow)
+    strong_trend = close > nz(ema_filter, 0)
+    rsi_ok = rsi > 35 and rsi < 78
+
+    if bullish and strong_trend and rsi_ok and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+        trade_regime := 1
+        entry_price := close
+        bars_in_trade := 0
+
+    // Also enter on strong momentum without crossover
+    momentum_entry = nz(ema_fast, 0) > nz(ema_slow, 0) and close > nz(ema_fast, 0) and rsi > 50 and rsi < 70
+    fresh_momentum = ta.change(close, 5) > 0 and ta.change(close, 10) > 0
+    if momentum_entry and fresh_momentum and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+        trade_regime := 1
+        entry_price := close
+        bars_in_trade := 0
+
+    // Exit: crossunder or RSI extreme or trailing
+    if strategy.position_size > 0 and trade_regime == 1
+        trail_exit = close < entry_price - nz(atr, 10) * 2.5
+        if ta.crossunder(ema_fast, ema_slow) or rsi > 82 or trail_exit
+            strategy.close("Long")
+
+// ==========================================
+// REGIME 2: RANGING — Mean reversion
+// ==========================================
+if regime == 2
+    // Buy near lower BB with RSI oversold
+    rsi_low = rsi < 35
+    at_lower = close < nz(lower, 0) + nz(dev, 1) * 0.5
+    rsi_turning = rsi > rsi[1]
+
+    if rsi_low and at_lower and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+        trade_regime := 2
+        entry_price := close
+        bars_in_trade := 0
+
+    // Also enter when RSI is moderately low and price touches lower BB
+    moderate_entry = rsi < 40 and close < nz(lower, 0)
+    if moderate_entry and rsi_turning and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+        trade_regime := 2
+        entry_price := close
+        bars_in_trade := 0
+
+    // Exit: mean reversion to basis/upper
+    if strategy.position_size > 0 and trade_regime == 2
+        profit_target = close > nz(basis, 99999) and rsi > 55
+        stop_out = close < entry_price - nz(atr, 10) * 2.0
+        if profit_target or stop_out or rsi > 70
+            strategy.close("Long")
+
+// === UNIVERSAL TIME STOP ===
+if strategy.position_size > 0
+    bars_in_trade := bars_in_trade + 1
+    if bars_in_trade > 30
+        strategy.close("Long")
+        bars_in_trade := 0
