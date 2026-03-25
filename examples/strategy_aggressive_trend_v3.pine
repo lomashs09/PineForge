@@ -1,0 +1,57 @@
+//@version=5
+strategy("Aggressive Trend V3 - Breakout", overlay=true, default_qty_value=0.5)
+
+// ============================================================
+// AGGRESSIVE V3 — Donchian Channel Breakout + Trend
+// Catches big moves by entering on breakouts of recent range
+// Both long and short for maximum capture
+// ============================================================
+
+// === PARAMETERS ===
+breakout_len = input.int(20, "Breakout Lookback")
+exit_len = input.int(10, "Exit Lookback")
+ema_filter = input.int(30, "EMA Trend Filter")
+atr_len = input.int(14, "ATR Length")
+
+// === INDICATORS ===
+upper_channel = ta.highest(high, breakout_len)
+lower_channel = ta.lowest(low, breakout_len)
+exit_high = ta.highest(high, exit_len)
+exit_low = ta.lowest(low, exit_len)
+ema = ta.ema(close, ema_filter)
+atr = ta.atr(atr_len)
+
+// Previous bar's channel values for breakout detection
+prev_upper = nz(upper_channel[1], 99999)
+prev_lower = nz(lower_channel[1], 0)
+
+// === STATE ===
+var trade_dir = 0
+
+// === BREAKOUT ENTRIES ===
+// Long breakout: close above previous upper channel + above EMA
+long_breakout = close > prev_upper and close > nz(ema, 0)
+if long_breakout and trade_dir != 1
+    strategy.entry("Long", strategy.long)
+    trade_dir := 1
+
+// Short breakout: close below previous lower channel + below EMA
+short_breakout = close < prev_lower and close < nz(ema, 0)
+if short_breakout and trade_dir != -1
+    strategy.entry("Short", strategy.short)
+    trade_dir := -1
+
+// === EXITS — Opposite channel touch ===
+if trade_dir == 1
+    // Exit long when price drops to exit-period low
+    exit_level = nz(exit_low[1], 0)
+    if close < exit_level
+        strategy.close("Long")
+        trade_dir := 0
+
+if trade_dir == -1
+    // Exit short when price rises to exit-period high
+    exit_level = nz(exit_high[1], 99999)
+    if close > exit_level
+        strategy.close("Short")
+        trade_dir := 0
