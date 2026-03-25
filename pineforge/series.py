@@ -13,6 +13,10 @@ from typing import Any
 
 _NA = float("nan")
 
+# Monotonic counter gives each Series a stable unique ID (BUG 11).
+# Using id() is fragile because CPython reuses memory addresses.
+_series_counter: int = 0
+
 
 def na_value() -> float:
     return _NA
@@ -29,9 +33,12 @@ def is_na(val: Any) -> bool:
 class Series:
     """A time-indexed series of values with history access via `[n]`."""
 
-    __slots__ = ("_data",)
+    __slots__ = ("_data", "_id")
 
     def __init__(self, initial: Any = None):
+        global _series_counter
+        _series_counter += 1
+        self._id: int = _series_counter
         self._data: list[Any] = []
         if initial is not None:
             self._data.append(initial)

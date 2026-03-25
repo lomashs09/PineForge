@@ -100,6 +100,7 @@ def _run_backtest(args: argparse.Namespace) -> None:
         commission=args.commission,
         slippage=args.slippage,
         fill_on=args.fill_on,
+        interval=args.interval,
     )
 
     print(f"Loading strategy: {script_path.name}")

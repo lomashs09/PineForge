@@ -26,10 +26,15 @@ class TAState:
     def __init__(self):
         self._ema_state: dict[int, float] = {}
         self._rsi_state: dict[int, dict] = {}
+        self._macd_line_series: dict[int, "Series"] = {}  # BUG 1: MACD signal
+        self._atr_state: dict[int, float] | None = None
 
     def reset(self):
         self._ema_state.clear()
         self._rsi_state.clear()
+        self._macd_line_series.clear()
+        if self._atr_state is not None:
+            self._atr_state.clear()
 
 
 _state = TAState()
@@ -50,13 +55,18 @@ def ta_sma(source: Any, length: Any) -> float:
     return sum(valid) / length
 
 
+def _series_key(source: "Series", multiplier: int) -> int:
+    """Stable state key using Series._id — avoids id() memory-address collisions (BUG 11)."""
+    return getattr(source, "_id", id(source)) * 10007 + multiplier
+
+
 def ta_ema(source: Any, length: Any) -> float:
     length = int(_unwrap(length))
     if not isinstance(source, Series):
         return na_value()
 
     k = 2.0 / (length + 1)
-    state_key = id(source) ^ (length * 31)
+    state_key = _series_key(source, length * 31)
 
     current = source.current
     if is_na(current):
@@ -84,7 +94,7 @@ def ta_rma(source: Any, length: Any) -> float:
         return na_value()
 
     alpha = 1.0 / length
-    state_key = id(source) ^ (length * 37)
+    state_key = _series_key(source, length * 37)
 
     current = source.current
     if is_na(current):
@@ -110,7 +120,7 @@ def ta_rsi(source: Any, length: Any) -> float:
     if not isinstance(source, Series) or len(source) < 2:
         return na_value()
 
-    state_key = id(source) ^ (length * 41)
+    state_key = _series_key(source, length * 41)
 
     change = source[0] - source[1] if not is_na(source[0]) and not is_na(source[1]) else na_value()
     if is_na(change):
@@ -144,25 +154,43 @@ def ta_rsi(source: Any, length: Any) -> float:
     return 100.0 - (100.0 / (1.0 + rs))
 
 
+def _cross_values(v: Any) -> tuple[Any, Any]:
+    """Return (current, prev) for crossover checks — supports Series or scalar (BUG 3)."""
+    if isinstance(v, Series):
+        return v[0], v[1]
+    scalar = _unwrap(v)
+    return scalar, scalar  # constant level: current == prev
+
+
 def ta_crossover(a: Any, b: Any) -> bool:
-    if not isinstance(a, Series) or not isinstance(b, Series):
+    """a crossed over b: a[1] <= b[1] and a[0] > b[0].
+    Supports Series and scalar values (e.g. ta.crossover(rsi, 70)).
+    """
+    if not isinstance(a, Series) and not isinstance(b, Series):
         return False
-    if len(a) < 2 or len(b) < 2:
+    if isinstance(a, Series) and len(a) < 2:
         return False
-    a0, a1 = a[0], a[1]
-    b0, b1 = b[0], b[1]
+    if isinstance(b, Series) and len(b) < 2:
+        return False
+    a0, a1 = _cross_values(a)
+    b0, b1 = _cross_values(b)
     if any(is_na(v) for v in (a0, a1, b0, b1)):
         return False
     return a0 > b0 and a1 <= b1
 
 
 def ta_crossunder(a: Any, b: Any) -> bool:
-    if not isinstance(a, Series) or not isinstance(b, Series):
+    """a crossed under b: a[1] >= b[1] and a[0] < b[0].
+    Supports Series and scalar values (e.g. ta.crossunder(rsi, 30)).
+    """
+    if not isinstance(a, Series) and not isinstance(b, Series):
         return False
-    if len(a) < 2 or len(b) < 2:
+    if isinstance(a, Series) and len(a) < 2:
         return False
-    a0, a1 = a[0], a[1]
-    b0, b1 = b[0], b[1]
+    if isinstance(b, Series) and len(b) < 2:
+        return False
+    a0, a1 = _cross_values(a)
+    b0, b1 = _cross_values(b)
     if any(is_na(v) for v in (a0, a1, b0, b1)):
         return False
     return a0 < b0 and a1 >= b1
@@ -208,10 +236,11 @@ def ta_stdev(source: Any, length: Any) -> float:
         return na_value()
     vals = [source[i] for i in range(length)]
     valid = [v for v in vals if not is_na(v)]
-    if len(valid) < length:
+    if len(valid) < 2:  # sample stdev requires at least 2 points
         return na_value()
     mean = sum(valid) / len(valid)
-    variance = sum((v - mean) ** 2 for v in valid) / len(valid)
+    # TradingView uses sample standard deviation (Bessel's correction ÷N-1) — BUG 4
+    variance = sum((v - mean) ** 2 for v in valid) / (len(valid) - 1)
     return variance ** 0.5
 
 
@@ -231,13 +260,33 @@ def ta_tr(high_s: Series, low_s: Series, close_s: Series) -> float:
 
 
 def ta_macd(source: Any, fastlen: Any = 12, slowlen: Any = 26, siglen: Any = 9):
-    """Returns (macd_line, signal, histogram) as a tuple."""
-    fast = ta_ema(source, fastlen)
-    slow = ta_ema(source, slowlen)
+    """Returns (macd_line, signal, histogram) as a tuple.
+
+    BUG 1 fix: signal is EMA(macd_line, siglen); histogram = macd_line - signal.
+    A persistent Series is maintained per (source, fastlen, slowlen) so the signal
+    EMA accumulates correctly across bars.
+    """
+    fl = int(_unwrap(fastlen))
+    sl = int(_unwrap(slowlen))
+    sg = int(_unwrap(siglen))
+
+    fast = ta_ema(source, fl)
+    slow = ta_ema(source, sl)
     if is_na(fast) or is_na(slow):
         return na_value(), na_value(), na_value()
     macd_line = fast - slow
-    return macd_line, na_value(), na_value()
+
+    # Maintain a per-call Series for the MACD line so signal EMA accumulates.
+    src_id = getattr(source, "_id", id(source))
+    state_key = src_id * 100003 + fl * 1009 + sl
+    if state_key not in _state._macd_line_series:
+        _state._macd_line_series[state_key] = Series()
+    ml_series = _state._macd_line_series[state_key]
+    ml_series.push(macd_line)
+
+    signal = ta_ema(ml_series, sg)
+    histogram = (macd_line - signal) if not is_na(signal) else na_value()
+    return macd_line, signal, histogram
 
 
 def register(interpreter) -> None:
@@ -260,7 +309,7 @@ def register(interpreter) -> None:
 def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series) -> None:
     """Register indicators that depend on OHLCV series (ta.tr, ta.atr)."""
 
-    _atr_state: dict[int, float] = {}
+    _state._atr_state = {}
 
     def _ta_tr_wrapper() -> float:
         return ta_tr(high_s, low_s, close_s)
@@ -271,10 +320,11 @@ def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series) 
         if is_na(tr_val):
             return na_value()
 
+        atr_state = _state._atr_state
         alpha = 1.0 / length
         state_key = length
 
-        if state_key not in _atr_state:
+        if state_key not in atr_state:
             if len(close_s) < length + 1:
                 return na_value()
             tr_vals = []
@@ -287,12 +337,12 @@ def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series) 
                 if any(is_na(v) for v in (h, l, pc)):
                     return na_value()
                 tr_vals.append(max(h - l, abs(h - pc), abs(l - pc)))
-            _atr_state[state_key] = sum(tr_vals) / length
-            return _atr_state[state_key]
+            atr_state[state_key] = sum(tr_vals) / length
+            return atr_state[state_key]
 
-        prev = _atr_state[state_key]
+        prev = atr_state[state_key]
         result = alpha * tr_val + (1 - alpha) * prev
-        _atr_state[state_key] = result
+        atr_state[state_key] = result
         return result
 
     interpreter.register_builtin("ta.tr", _ta_tr_wrapper)

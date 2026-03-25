@@ -84,13 +84,34 @@ class BacktestResult:
         return "\n".join(lines)
 
 
-def compute_results(broker: Broker, initial_capital: float, strategy_name: str = "") -> BacktestResult:
+# IMP 2: bars-per-year by timeframe for correct Sharpe annualization.
+_BARS_PER_YEAR: dict[str, float] = {
+    "1m":  252 * 390,      # US equities, ~390 min/day
+    "3m":  252 * 130,
+    "5m":  252 * 78,
+    "15m": 252 * 26,
+    "30m": 252 * 13,
+    "1h":  252 * 6.5,
+    "2h":  252 * 3.25,
+    "4h":  252 * 1.625,
+    "1d":  252,
+    "1wk": 52,
+    "1mo": 12,
+}
+
+
+def compute_results(
+    broker: Broker,
+    initial_capital: float,
+    strategy_name: str = "",
+    interval: str = "1d",
+) -> BacktestResult:
     trades = broker.closed_trades
     equity_curve = broker.equity_curve
 
     total = len(trades)
     winners = [t for t in trades if t.pnl > 0]
-    losers = [t for t in trades if t.pnl <= 0]
+    losers = [t for t in trades if t.pnl < 0]
 
     gross_profit = sum(t.pnl for t in winners)
     gross_loss = sum(t.pnl for t in losers)
@@ -107,7 +128,8 @@ def compute_results(broker: Broker, initial_capital: float, strategy_name: str =
     avg_loss = gross_loss / len(losers) if losers else 0.0
 
     max_dd, max_dd_pct = _compute_max_drawdown(equity_curve)
-    sharpe = _compute_sharpe(equity_curve)
+    bars_per_year = _BARS_PER_YEAR.get(interval, 252)
+    sharpe = _compute_sharpe(equity_curve, bars_per_year=bars_per_year)
 
     return BacktestResult(
         strategy_name=strategy_name,
@@ -150,8 +172,16 @@ def _compute_max_drawdown(equity_curve: list[float]) -> tuple[float, float]:
     return max_dd, max_dd_pct
 
 
-def _compute_sharpe(equity_curve: list[float], risk_free: float = 0.0) -> float:
-    """Annualized Sharpe ratio from equity curve returns."""
+def _compute_sharpe(
+    equity_curve: list[float],
+    risk_free: float = 0.0,
+    bars_per_year: float = 252,
+) -> float:
+    """Annualized Sharpe ratio from equity curve returns.
+
+    IMP 2: bars_per_year is now configurable so the annualization factor
+    matches the actual bar interval (daily=252, hourly=252*6.5, etc.).
+    """
     if len(equity_curve) < 2:
         return 0.0
     returns = []
@@ -165,5 +195,4 @@ def _compute_sharpe(equity_curve: list[float], risk_free: float = 0.0) -> float:
     std_r = math.sqrt(variance) if variance > 0 else 0.0
     if std_r == 0:
         return 0.0
-    # Annualize assuming daily bars (252 trading days)
-    return (mean_r - risk_free) / std_r * math.sqrt(252)
+    return (mean_r - risk_free) / std_r * math.sqrt(bars_per_year)

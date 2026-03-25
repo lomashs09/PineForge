@@ -30,6 +30,20 @@ class StrategyContext:
     def set_broker(self, broker: Broker) -> None:
         self.broker = broker
 
+    def reset(self) -> None:
+        """Reset to defaults for a fresh backtest run (BUG 10: prevent state leak)."""
+        self.title = "Strategy"
+        self.overlay = True
+        self.initial_capital = 10000.0
+        self.default_qty_type = "fixed"
+        self.default_qty_value = 1.0
+        self.commission_type = "percent"
+        self.commission_value = 0.0
+        self.slippage = 0
+        self.currency = "USD"
+        self.broker = None
+        self.bar_index = 0
+
 
 _ctx = StrategyContext()
 

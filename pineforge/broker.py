@@ -59,7 +59,9 @@ class Broker:
         self.position: Trade | None = None
         self.closed_trades: list[Trade] = []
         self.pending_orders: list[PendingOrder] = []
+        self._exit_orders: list[PendingOrder] = []
         self.equity_curve: list[float] = []
+        self._realized_pnl: float = 0.0  # IMP 3: O(1) running total
 
     @property
     def position_size(self) -> float:
@@ -87,10 +89,14 @@ class Broker:
         stop: float | None = None, limit: float | None = None,
         bar_index: int = 0,
     ) -> None:
-        self.pending_orders.append(PendingOrder(
+        order = PendingOrder(
             id=id, action="exit", from_entry=from_entry,
             stop=stop, limit=limit, bar_index=bar_index,
-        ))
+        )
+        # Replace any existing exit with the same id (Pine Script semantics:
+        # calling strategy.exit() again with the same id updates the order).
+        self._exit_orders = [o for o in self._exit_orders if o.id != id]
+        self._exit_orders.append(order)
 
     def process_orders(
         self,
@@ -101,32 +107,58 @@ class Broker:
         close_price: float,
         date: Any = None,
     ) -> None:
-        """Process all pending orders against the current bar's prices."""
+        """Process all pending orders against the current bar's prices.
+
+        TradingView semantics:
+        1. Close orders apply only to positions that existed BEFORE this bar.
+        2. Entry orders fill at the open (may flip/reverse positions).
+        3. Persistent exit orders (stop/limit) evaluate against the bar's OHLC.
+        """
         fill_price = open_price if self.fill_on == "next_open" else close_price
 
         orders = list(self.pending_orders)
         self.pending_orders.clear()
 
+        # Phase 1: process close/close_all orders against the pre-existing position.
+        for order in orders:
+            if order.action in ("close", "close_all"):
+                if order.action == "close":
+                    self._fill_close(order, fill_price, bar_index, date)
+                else:
+                    self._fill_close_all(fill_price, bar_index, date)
+
+        # Phase 2: process entry orders (may open new position or flip direction).
         for order in orders:
             if order.action == "entry":
                 self._fill_entry(order, fill_price, bar_index, date)
-            elif order.action == "close":
-                self._fill_close(order, fill_price, bar_index, date)
-            elif order.action == "close_all":
-                self._fill_close_all(fill_price, bar_index, date)
-            elif order.action == "exit":
-                self._process_exit(order, open_price, high_price, low_price, close_price, bar_index, date)
+
+        # Phase 3: evaluate persistent exit orders (stop/limit) against this bar's OHLC.
+        if self.position is not None and self._exit_orders:
+            for exit_order in list(self._exit_orders):
+                if self.position is None:
+                    break
+                self._process_exit(exit_order, open_price, high_price, low_price, close_price, bar_index, date)
 
         self._update_equity(close_price)
 
     def _fill_entry(self, order: PendingOrder, price: float, bar_index: int, date: Any) -> None:
-        adj_price = price + self.slippage if order.direction == "long" else price - self.slippage
-
+        # BUG 9 fix: when flipping direction, close old position with its OWN
+        # slippage (adverse to the direction being closed), then open the new
+        # position with its own adverse slippage.  Previously both used the
+        # same adj_price, which was wrong.
         if self.position is not None:
             if self.position.direction != order.direction:
-                self._close_position(adj_price, bar_index, date)
+                close_slip = (
+                    price - self.slippage  # long exit: lower is worse
+                    if self.position.direction == "long"
+                    else price + self.slippage  # short exit: higher is worse
+                )
+                self._close_position(close_slip, bar_index, date)
             else:
-                return
+                return  # same direction: already in position, no-op
+
+        # Entry fill with adverse slippage.
+        adj_price = price + self.slippage if order.direction == "long" else price - self.slippage
 
         cost = adj_price * order.qty * self.commission
         self.cash -= cost
@@ -166,27 +198,28 @@ class Broker:
 
         is_long = self.position.direction == "long"
 
+        # BUG 2 fix: apply adverse slippage to stop/limit fill prices, just
+        # like regular close orders.  Stop exits worsen by slippage; limit
+        # exits also get a small amount of adverse slippage.
         if order.stop is not None:
             if is_long and low_p <= order.stop:
-                price = min(open_p, order.stop)
-                self._close_position(price, bar_index, date)
+                raw = min(open_p, order.stop)
+                self._close_position(raw - self.slippage, bar_index, date)
                 return
             if not is_long and high_p >= order.stop:
-                price = max(open_p, order.stop)
-                self._close_position(price, bar_index, date)
+                raw = max(open_p, order.stop)
+                self._close_position(raw + self.slippage, bar_index, date)
                 return
 
         if order.limit is not None:
             if is_long and high_p >= order.limit:
-                price = max(open_p, order.limit)
-                self._close_position(price, bar_index, date)
+                raw = max(open_p, order.limit)
+                self._close_position(raw - self.slippage, bar_index, date)
                 return
             if not is_long and low_p <= order.limit:
-                price = min(open_p, order.limit)
-                self._close_position(price, bar_index, date)
+                raw = min(open_p, order.limit)
+                self._close_position(raw + self.slippage, bar_index, date)
                 return
-
-        self.pending_orders.append(order)
 
     def _close_position(self, exit_price: float, bar_index: int, date: Any) -> None:
         if self.position is None:
@@ -206,8 +239,10 @@ class Broker:
         pos.pnl = pnl
 
         self.cash += pnl
+        self._realized_pnl += pnl  # IMP 3: maintain running total
         self.closed_trades.append(pos)
         self.position = None
+        self._exit_orders.clear()
 
     def _update_equity(self, close_price: float) -> None:
         unrealized = 0.0
@@ -216,5 +251,6 @@ class Broker:
                 unrealized = (close_price - self.position.entry_price) * self.position.qty
             else:
                 unrealized = (self.position.entry_price - close_price) * self.position.qty
-        self.equity = self.initial_capital + sum(t.pnl for t in self.closed_trades) + unrealized
+        # IMP 3: use O(1) running total instead of O(n) sum over all trades
+        self.equity = self.initial_capital + self._realized_pnl + unrealized
         self.equity_curve.append(self.equity)

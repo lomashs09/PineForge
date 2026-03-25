@@ -30,6 +30,10 @@ class Interpreter:
         self.bar_index: int = 0
         self._initialized_vars: set[str] = set()
         self._script: ast.Script | None = None
+        # BUG 8: track which non-var Series were written on the current bar so
+        # we can back-fill `na` for any that were skipped (conditional assigns).
+        self._series_names: set[str] = set()   # all non-var Series we know about
+        self._bar_written: set[str] = set()    # written on the current bar
 
     def register_builtin(self, name: str, func: Callable) -> None:
         self.builtins[name] = func
@@ -38,12 +42,24 @@ class Interpreter:
         self._script = script
 
     def execute_bar(self, bar_index: int) -> None:
-        """Execute the full script for a single bar."""
+        """Execute the full script for a single bar.
+
+        BUG 8: After executing, any non-var Series that was NOT written this
+        bar gets a `na` pushed so history indices stay aligned with bar_index.
+        """
         if self._script is None:
             raise RuntimeError_("No script loaded")
         self.bar_index = bar_index
+        self._bar_written.clear()
         for stmt in self._script.statements:
             self._exec(stmt)
+        # Back-fill na for Series that weren't written on this bar
+        if bar_index > 0:
+            for name in self._series_names:
+                if name not in self._bar_written:
+                    s = self.env.get(name) if self.env.has(name) else None
+                    if isinstance(s, Series) and name not in self._initialized_vars:
+                        s.push(na_value())
 
     def _exec(self, node: ast.Node) -> Any:
         method_name = f"_exec_{type(node).__name__}"
@@ -71,9 +87,14 @@ class Interpreter:
             if self.env.has(node.name) and isinstance(self.env.get(node.name), Series):
                 s = self.env.get(node.name)
                 s.push(self._unwrap(value))
+                # BUG 8: mark as written this bar so we don't back-fill na
+                self._bar_written.add(node.name)
                 return s
             series = self._to_series(value)
             self.env.define(node.name, series)
+            # BUG 8: register as a known non-var Series and mark written
+            self._series_names.add(node.name)
+            self._bar_written.add(node.name)
             return series
 
     def _exec_Reassignment(self, node: ast.Reassignment) -> Any:
