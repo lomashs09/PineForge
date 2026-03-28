@@ -34,6 +34,7 @@ class LiveConfig:
 
     # Strategy
     script_path: str = ""
+    script_source: str = ""  # If set, used instead of script_path (for API usage)
 
     def validate(self) -> list[str]:
         errors = []
@@ -41,7 +42,7 @@ class LiveConfig:
             errors.append("METAAPI_TOKEN is not set")
         if not self.metaapi_account_id:
             errors.append("METAAPI_ACCOUNT_ID is not set")
-        if not self.script_path:
+        if not self.script_path and not self.script_source:
             errors.append("--script is required")
         if self.lot_size <= 0:
             errors.append("Lot size must be positive")

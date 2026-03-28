@@ -40,6 +40,7 @@ class LiveBridge:
             max_lot_size=config.max_lot_size,
         )
         self._shutdown = False
+        self._register_signals = True  # Set to False when running inside BotManager
         self._last_bar_time: str | None = None
         self._pending_signal: str | None = None
         self._interpreter: Interpreter | None = None
@@ -63,7 +64,10 @@ class LiveBridge:
 
     def _init_interpreter(self):
         """Parse the script and set up the interpreter."""
-        source = Path(self.config.script_path).read_text()
+        if self.config.script_source:
+            source = self.config.script_source
+        else:
+            source = Path(self.config.script_path).read_text()
         tokens = Lexer(source).tokenize()
         self._script_ast = Parser(tokens).parse()
 
@@ -145,7 +149,8 @@ class LiveBridge:
         print("=" * 60, flush=True)
         print(f"  PineForge Live Trading Bridge ({mode_str})", flush=True)
         print("=" * 60, flush=True)
-        print(f"  Script:    {Path(cfg.script_path).name}", flush=True)
+        script_label = Path(cfg.script_path).name if cfg.script_path else "API Script"
+        print(f"  Script:    {script_label}", flush=True)
         print(f"  Symbol:    {cfg.symbol}", flush=True)
         print(f"  Timeframe: {cfg.timeframe}", flush=True)
         print(f"  Lot size:  {cfg.lot_size}", flush=True)
@@ -213,7 +218,8 @@ class LiveBridge:
         print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...", flush=True)
         print(f"  Execution mode: NEXT BAR OPEN (signal queued, executed on next bar)\n", flush=True)
 
-        self._setup_signal_handlers()
+        if self._register_signals:
+            self._setup_signal_handlers()
         self._start_time = datetime.now(timezone.utc)
         self._last_heartbeat = self._start_time
 
