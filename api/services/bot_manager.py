@@ -195,8 +195,9 @@ class BotManager:
             async with self._session_factory() as db:
                 result = await db.execute(select(Bot).where(Bot.id == bot_id))
                 bot = result.scalar_one_or_none()
-                if bot and bot.status in ("running", "starting"):
+                if bot and bot.status in ("running", "starting", "error"):
                     bot.status = "stopped"
+                    bot.error_message = None
                     bot.stopped_at = datetime.now(timezone.utc)
                     await db.commit()
             return
