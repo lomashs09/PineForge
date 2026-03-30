@@ -76,7 +76,7 @@ class BotManager:
             # Set up dedicated logger
             bot_logger = logging.getLogger(f"bot.{bot_id}")
             bot_logger.setLevel(logging.DEBUG)
-            db_handler = BotDatabaseHandler(bot_id, self._session_factory)
+            db_handler = BotDatabaseHandler(bot_id, self._session_factory, broker_account_id=account.id)
             bot_logger.addHandler(db_handler)
             db_handler.start()
 

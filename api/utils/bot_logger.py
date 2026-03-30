@@ -8,23 +8,51 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ..models.bot_log import BotLog
+from ..models.bot_trade import BotTrade
+
+# Patterns for parsing trade execution lines from LiveBridge/Executor print output
+_TRADE_BUY_RE = re.compile(
+    r"\[(?:LIVE|DRY RUN)\]\s+BUY\s+([\d.]+)\s+(\S+)\s*->\s*order\s*#?(\S+)",
+    re.IGNORECASE,
+)
+_TRADE_SELL_RE = re.compile(
+    r"\[(?:LIVE|DRY RUN)\]\s+SELL\s+([\d.]+)\s+(\S+)\s*->\s*order\s*#?(\S+)",
+    re.IGNORECASE,
+)
+_TRADE_CLOSE_RE = re.compile(
+    r"\[(?:LIVE|DRY RUN)\]\s+Closed all\s+(\S+)",
+    re.IGNORECASE,
+)
+_TRADE_WOULD_BUY_RE = re.compile(
+    r"\[DRY RUN\]\s+Would BUY\s+([\d.]+)\s+(\S+)",
+    re.IGNORECASE,
+)
+_TRADE_WOULD_SELL_RE = re.compile(
+    r"\[DRY RUN\]\s+Would SELL\s+([\d.]+)\s+(\S+)",
+    re.IGNORECASE,
+)
 
 
 class BotDatabaseHandler(logging.Handler):
-    """Logging handler that batches log records and writes them to the bot_logs table."""
+    """Logging handler that batches log records and writes them to the bot_logs table.
+    Also detects trade execution lines and writes to bot_trades table.
+    """
 
     def __init__(
         self,
         bot_id: uuid.UUID,
         session_factory: async_sessionmaker,
+        broker_account_id: uuid.UUID = None,
         flush_interval: float = 1.0,
         batch_size: int = 50,
     ):
         super().__init__()
         self.bot_id = bot_id
+        self.broker_account_id = broker_account_id
         self.session_factory = session_factory
         self._queue: asyncio.Queue = asyncio.Queue()
         self._flush_interval = flush_interval
@@ -61,9 +89,93 @@ class BotDatabaseHandler(logging.Handler):
         }
 
         try:
-            self._queue.put_nowait(entry)
+            self._queue.put_nowait(("log", entry))
         except asyncio.QueueFull:
-            pass  # Drop log entry rather than blocking
+            pass
+
+        # Check if this is a trade execution line and queue a trade record
+        trade = self._parse_trade(message)
+        if trade:
+            try:
+                self._queue.put_nowait(("trade", trade))
+            except asyncio.QueueFull:
+                pass
+
+    def _parse_trade(self, message: str) -> Optional[dict]:
+        """Try to parse a trade execution from a log message."""
+        now = datetime.now(timezone.utc)
+
+        m = _TRADE_BUY_RE.search(message)
+        if m:
+            return {
+                "bot_id": self.bot_id,
+                "broker_account_id": self.broker_account_id,
+                "direction": "long",
+                "symbol": m.group(2),
+                "lot_size": float(m.group(1)),
+                "entry_price": 0,  # Executor doesn't print the fill price
+                "signal": "entry_long",
+                "order_id": m.group(3),
+                "opened_at": now,
+            }
+
+        m = _TRADE_SELL_RE.search(message)
+        if m:
+            return {
+                "bot_id": self.bot_id,
+                "broker_account_id": self.broker_account_id,
+                "direction": "short",
+                "symbol": m.group(2),
+                "lot_size": float(m.group(1)),
+                "entry_price": 0,
+                "signal": "entry_short",
+                "order_id": m.group(3),
+                "opened_at": now,
+            }
+
+        m = _TRADE_WOULD_BUY_RE.search(message)
+        if m:
+            return {
+                "bot_id": self.bot_id,
+                "broker_account_id": self.broker_account_id,
+                "direction": "long",
+                "symbol": m.group(2),
+                "lot_size": float(m.group(1)),
+                "entry_price": 0,
+                "signal": "entry_long",
+                "order_id": "dry-run",
+                "opened_at": now,
+            }
+
+        m = _TRADE_WOULD_SELL_RE.search(message)
+        if m:
+            return {
+                "bot_id": self.bot_id,
+                "broker_account_id": self.broker_account_id,
+                "direction": "short",
+                "symbol": m.group(2),
+                "lot_size": float(m.group(1)),
+                "entry_price": 0,
+                "signal": "entry_short",
+                "order_id": "dry-run",
+                "opened_at": now,
+            }
+
+        m = _TRADE_CLOSE_RE.search(message)
+        if m:
+            return {
+                "bot_id": self.bot_id,
+                "broker_account_id": self.broker_account_id,
+                "direction": "long",
+                "symbol": m.group(1),
+                "lot_size": 0,
+                "entry_price": 0,
+                "signal": "close",
+                "order_id": "close-all",
+                "opened_at": now,
+            }
+
+        return None
 
     @staticmethod
     def _map_level(levelno: int) -> str:
@@ -84,31 +196,39 @@ class BotDatabaseHandler(logging.Handler):
 
     async def _flush_all(self):
         """Drain the queue and insert all pending entries."""
-        entries = []
+        logs = []
+        trades = []
         while not self._queue.empty():
             try:
-                entries.append(self._queue.get_nowait())
+                kind, entry = self._queue.get_nowait()
+                if kind == "log":
+                    logs.append(entry)
+                elif kind == "trade":
+                    trades.append(entry)
             except asyncio.QueueEmpty:
                 break
 
-        if not entries:
+        if not logs and not trades:
             return
 
         try:
             async with self.session_factory() as session:
-                for entry in entries:
+                for entry in logs:
                     session.add(BotLog(**entry))
+                for entry in trades:
+                    if entry.get("broker_account_id"):
+                        session.add(BotTrade(**entry))
                 await session.commit()
         except Exception:
             pass  # Don't crash the bot if logging fails
 
 
 # Patterns for detecting log levels from print() output
-_TRADE_PATTERN = re.compile(r"\[(?:LIVE|DRY RUN)\]\s+(?:BUY|SELL|Would BUY|Would SELL|Close)", re.IGNORECASE)
-_SIGNAL_PATTERN = re.compile(r"Signal queued|Executing queued signal|Flipping:", re.IGNORECASE)
-_HEARTBEAT_PATTERN = re.compile(r"HEARTBEAT", re.IGNORECASE)
-_ERROR_PATTERN = re.compile(r"\[ERROR\]|Error:|Risk blocked:", re.IGNORECASE)
-_NEW_BAR_PATTERN = re.compile(r"New bar:")
+_LEVEL_TRADE_PATTERN = re.compile(r"\[(?:LIVE|DRY RUN)\]\s+(?:BUY|SELL|Would BUY|Would SELL|Close)", re.IGNORECASE)
+_LEVEL_SIGNAL_PATTERN = re.compile(r"Signal queued|Executing queued signal|Flipping:", re.IGNORECASE)
+_LEVEL_HEARTBEAT_PATTERN = re.compile(r"HEARTBEAT", re.IGNORECASE)
+_LEVEL_ERROR_PATTERN = re.compile(r"\[ERROR\]|Error:|Risk blocked:", re.IGNORECASE)
+_LEVEL_NEW_BAR_PATTERN = re.compile(r"New bar:")
 
 
 class BotPrintCapture(io.TextIOBase):
@@ -150,15 +270,15 @@ class BotPrintCapture(io.TextIOBase):
     @staticmethod
     def _detect_level(line: str) -> tuple:
         """Returns (logging_level, bot_level_string)."""
-        if _TRADE_PATTERN.search(line):
+        if _LEVEL_TRADE_PATTERN.search(line):
             return logging.INFO, "trade"
-        if _SIGNAL_PATTERN.search(line):
+        if _LEVEL_SIGNAL_PATTERN.search(line):
             return logging.INFO, "signal"
-        if _HEARTBEAT_PATTERN.search(line):
+        if _LEVEL_HEARTBEAT_PATTERN.search(line):
             return logging.INFO, "heartbeat"
-        if _ERROR_PATTERN.search(line):
+        if _LEVEL_ERROR_PATTERN.search(line):
             return logging.ERROR, "error"
-        if _NEW_BAR_PATTERN.search(line):
+        if _LEVEL_NEW_BAR_PATTERN.search(line):
             return logging.INFO, "info"
         return logging.INFO, "info"
 
