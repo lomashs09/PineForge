@@ -157,14 +157,27 @@ def download(
     if end:
         kwargs["end"] = end
 
+    # yfinance intraday data only goes back ~730 days; auto-adjust start if needed
+    if interval in ("1m", "5m", "15m", "1h"):
+        from datetime import datetime, timedelta
+        max_lookback = 729 if interval == "1h" else 59 if interval in ("5m", "15m") else 6
+        earliest = (datetime.now() - timedelta(days=max_lookback)).strftime("%Y-%m-%d")
+        if start < earliest:
+            print(f"  Adjusting start date from {start} to {earliest} (yfinance {interval} limit)")
+            kwargs["start"] = earliest
+
     df = yf.download(ticker, progress=False, **kwargs)
 
-    if df.empty:
-        raise ValueError(f"No data returned for symbol '{ticker}'. Check the ticker and date range.")
-
-    # yfinance returns MultiIndex columns when downloading single ticker too sometimes
+    # yfinance returns MultiIndex columns — flatten before checking empty
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
+    if df.empty or len(df) == 0:
+        raise ValueError(
+            f"No data returned for symbol '{ticker}' (original: '{symbol}'). "
+            f"Check the ticker and date range. "
+            f"Hint: for intraday intervals yfinance only provides limited history."
+        )
 
     df = df.reset_index()
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=PineForge API Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PineForge
+EnvironmentFile=/home/ubuntu/PineForge/.env
+ExecStart=/home/ubuntu/PineForge/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

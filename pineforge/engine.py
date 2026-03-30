@@ -27,12 +27,14 @@ class Engine:
         slippage: float = 0.0,
         fill_on: str = "next_open",
         interval: str = "1d",
+        qty_override: float = None,
     ):
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
         self.fill_on = fill_on
         self.interval = interval  # IMP 2: used for Sharpe annualization
+        self.qty_override = qty_override
 
     def run(self, script_source: str, data: DataFeed, input_overrides: dict[str, Any] | None = None) -> BacktestResult:
         tokens = Lexer(script_source).tokenize()
@@ -130,6 +132,8 @@ class Engine:
                 # was created with its own defaults (0.0) so CLI args take precedence.
                 if i == 0:
                     _apply_strategy_defaults_to_broker(ctx, broker, self)
+                    if self.qty_override is not None:
+                        ctx.qty_override = self.qty_override
 
             else:
                 # "close" mode: script runs first, then orders fill on same bar's close.
@@ -138,6 +142,8 @@ class Engine:
 
                 if i == 0:
                     _apply_strategy_defaults_to_broker(ctx, broker, self)
+                    if self.qty_override is not None:
+                        ctx.qty_override = self.qty_override
 
                 broker.process_orders(
                     bar_index=i,

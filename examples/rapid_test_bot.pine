@@ -1,0 +1,14 @@
+//@version=5
+strategy("Rapid Test Bot", overlay=true, default_qty_value=0.01)
+
+// This strategy trades on EVERY bar for testing purposes.
+// It alternates between long and short based on whether the bar index is even or odd.
+// DO NOT use this with real money — it is purely for verifying bot execution.
+
+bar_mod = bar_index % 4
+
+if bar_mod == 0
+    strategy.entry("Long", strategy.long)
+
+if bar_mod == 2
+    strategy.entry("Short", strategy.short)

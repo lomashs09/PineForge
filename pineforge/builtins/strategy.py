@@ -26,6 +26,7 @@ class StrategyContext:
         self.currency: str = "USD"
         self.broker: Broker | None = None
         self.bar_index: int = 0
+        self.qty_override: float | None = None  # If set, forces this qty on all entries
 
     def set_broker(self, broker: Broker) -> None:
         self.broker = broker
@@ -43,6 +44,7 @@ class StrategyContext:
         self.currency = "USD"
         self.broker = None
         self.bar_index = 0
+        self.qty_override = None
 
 
 _ctx = StrategyContext()
@@ -75,7 +77,10 @@ def strategy_entry(id: Any, direction: Any, qty: Any = None, **_kwargs) -> None:
     from ..series import Series, is_na
     if isinstance(qty, Series):
         qty = qty.current
-    q = float(qty) if qty is not None and not is_na(qty) else _ctx.default_qty_value
+    if _ctx.qty_override is not None:
+        q = _ctx.qty_override
+    else:
+        q = float(qty) if qty is not None and not is_na(qty) else _ctx.default_qty_value
     _ctx.broker.submit_entry(str(id), str(direction), q, _ctx.bar_index)
 
 
@@ -109,7 +114,10 @@ def strategy_order(id: Any, direction: Any, qty: Any = None, **_kwargs) -> None:
     if _ctx.broker is None:
         return
     from ..series import is_na
-    q = float(qty) if qty is not None and not is_na(qty) else _ctx.default_qty_value
+    if _ctx.qty_override is not None:
+        q = _ctx.qty_override
+    else:
+        q = float(qty) if qty is not None and not is_na(qty) else _ctx.default_qty_value
     _ctx.broker.submit_entry(str(id), str(direction), q, _ctx.bar_index)
 
 
