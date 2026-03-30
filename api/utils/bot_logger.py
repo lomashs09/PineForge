@@ -15,24 +15,26 @@ from ..models.bot_log import BotLog
 from ..models.bot_trade import BotTrade
 
 # Patterns for parsing trade execution lines from LiveBridge/Executor print output
+# Format: [LIVE] BUY 0.01 XAUUSDm @ 4520.50 -> order #12345
 _TRADE_BUY_RE = re.compile(
-    r"\[(?:LIVE|DRY RUN)\]\s+BUY\s+([\d.]+)\s+(\S+)\s*->\s*order\s*#?(\S+)",
+    r"\[(?:LIVE|DRY RUN)\]\s+BUY\s+([\d.]+)\s+(\S+)\s*(?:@\s*([\d.]+))?\s*->\s*order\s*#?(\S+)",
     re.IGNORECASE,
 )
 _TRADE_SELL_RE = re.compile(
-    r"\[(?:LIVE|DRY RUN)\]\s+SELL\s+([\d.]+)\s+(\S+)\s*->\s*order\s*#?(\S+)",
+    r"\[(?:LIVE|DRY RUN)\]\s+SELL\s+([\d.]+)\s+(\S+)\s*(?:@\s*([\d.]+))?\s*->\s*order\s*#?(\S+)",
     re.IGNORECASE,
 )
+# Format: [LIVE] Closed all XAUUSDm positions pnl=-1.23
 _TRADE_CLOSE_RE = re.compile(
-    r"\[(?:LIVE|DRY RUN)\]\s+Closed all\s+(\S+)",
+    r"\[(?:LIVE|DRY RUN)\]\s+Closed all\s+(\S+)\s+positions\s*(?:pnl=([-\d.]+))?",
     re.IGNORECASE,
 )
 _TRADE_WOULD_BUY_RE = re.compile(
-    r"\[DRY RUN\]\s+Would BUY\s+([\d.]+)\s+(\S+)",
+    r"\[DRY RUN\]\s+Would BUY\s+([\d.]+)\s+(?:lots of\s+)?(\S+)",
     re.IGNORECASE,
 )
 _TRADE_WOULD_SELL_RE = re.compile(
-    r"\[DRY RUN\]\s+Would SELL\s+([\d.]+)\s+(\S+)",
+    r"\[DRY RUN\]\s+Would SELL\s+([\d.]+)\s+(?:lots of\s+)?(\S+)",
     re.IGNORECASE,
 )
 
@@ -107,29 +109,31 @@ class BotDatabaseHandler(logging.Handler):
 
         m = _TRADE_BUY_RE.search(message)
         if m:
+            price = float(m.group(3)) if m.group(3) else 0
             return {
                 "bot_id": self.bot_id,
                 "broker_account_id": self.broker_account_id,
                 "direction": "long",
                 "symbol": m.group(2),
                 "lot_size": float(m.group(1)),
-                "entry_price": 0,  # Executor doesn't print the fill price
+                "entry_price": price,
                 "signal": "entry_long",
-                "order_id": m.group(3),
+                "order_id": m.group(4),
                 "opened_at": now,
             }
 
         m = _TRADE_SELL_RE.search(message)
         if m:
+            price = float(m.group(3)) if m.group(3) else 0
             return {
                 "bot_id": self.bot_id,
                 "broker_account_id": self.broker_account_id,
                 "direction": "short",
                 "symbol": m.group(2),
                 "lot_size": float(m.group(1)),
-                "entry_price": 0,
+                "entry_price": price,
                 "signal": "entry_short",
-                "order_id": m.group(3),
+                "order_id": m.group(4),
                 "opened_at": now,
             }
 
@@ -163,6 +167,7 @@ class BotDatabaseHandler(logging.Handler):
 
         m = _TRADE_CLOSE_RE.search(message)
         if m:
+            pnl = float(m.group(2)) if m.group(2) else None
             return {
                 "bot_id": self.bot_id,
                 "broker_account_id": self.broker_account_id,
@@ -172,7 +177,9 @@ class BotDatabaseHandler(logging.Handler):
                 "entry_price": 0,
                 "signal": "close",
                 "order_id": "close-all",
+                "pnl": pnl,
                 "opened_at": now,
+                "closed_at": now,
             }
 
         return None

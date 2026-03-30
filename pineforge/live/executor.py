@@ -34,7 +34,8 @@ class Executor:
                 timeout=TIMEOUT,
             )
             logger.info("BUY order filled: %s", result)
-            print(f"  [LIVE] BUY {volume} {self._symbol} -> order #{result.get('orderId', 'N/A')}", flush=True)
+            price = result.get('price', result.get('openPrice', ''))
+            print(f"  [LIVE] BUY {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}", flush=True)
             return result
         except asyncio.TimeoutError:
             logger.error("BUY order timed out after %ds", TIMEOUT)
@@ -57,7 +58,8 @@ class Executor:
                 timeout=TIMEOUT,
             )
             logger.info("SELL order filled: %s", result)
-            print(f"  [LIVE] SELL {volume} {self._symbol} -> order #{result.get('orderId', 'N/A')}", flush=True)
+            price = result.get('price', result.get('openPrice', ''))
+            print(f"  [LIVE] SELL {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}", flush=True)
             return result
         except asyncio.TimeoutError:
             logger.error("SELL order timed out after %ds", TIMEOUT)
@@ -72,15 +74,24 @@ class Executor:
         """Close all open positions for the symbol."""
         logger.info("CLOSE ALL %s %s", "LIVE" if self._is_live else "DRY", self._symbol)
         if not self._is_live:
-            print(f"  [DRY RUN] Would CLOSE ALL {self._symbol} positions", flush=True)
+            print(f"  [DRY RUN] Would CLOSE ALL {self._symbol} positions pnl=0.00", flush=True)
             return True
         try:
+            # Get position profit before closing
+            pnl = 0.0
+            try:
+                positions = await self.get_positions()
+                for p in positions:
+                    pnl += p.get("profit", 0) or 0
+            except Exception:
+                pass
+
             result = await asyncio.wait_for(
                 self._conn.close_positions_by_symbol(self._symbol),
                 timeout=TIMEOUT,
             )
             logger.info("Close all result: %s", result)
-            print(f"  [LIVE] Closed all {self._symbol} positions", flush=True)
+            print(f"  [LIVE] Closed all {self._symbol} positions pnl={pnl:.2f}", flush=True)
             return True
         except asyncio.TimeoutError:
             logger.error("Close all timed out after %ds", TIMEOUT)
