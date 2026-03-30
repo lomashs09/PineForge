@@ -32,7 +32,7 @@ def _get_bot_manager(request: Request):
     return request.app.state.bot_manager
 
 
-@router.get("/", response_model=List[BotResponse])
+@router.get("", response_model=List[BotResponse])
 async def list_bots(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -43,7 +43,7 @@ async def list_bots(
     return result.scalars().all()
 
 
-@router.post("/", response_model=BotResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BotResponse, status_code=status.HTTP_201_CREATED)
 async def create_bot(
     body: BotCreate,
     current_user: User = Depends(get_current_user),

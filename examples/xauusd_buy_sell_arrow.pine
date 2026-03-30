@@ -1,0 +1,32 @@
+//@version=5
+strategy("XAUUSD Buy/Sell Arrow Strategy", overlay=true, default_qty_value=1)
+
+// Input settings
+smaPeriod = input.int(50, title="SMA Period")
+rsiPeriod = input.int(14, title="RSI Period")
+overboughtLevel = input.int(70, title="RSI Overbought Level")
+oversoldLevel = input.int(30, title="RSI Oversold Level")
+
+// Calculate SMA and RSI
+sma = ta.sma(close, smaPeriod)
+rsi = ta.rsi(close, rsiPeriod)
+
+// Buy: price crosses above SMA while RSI is not overbought (room to run)
+buySignal = (close > sma) and (close[1] < sma) and (rsi < overboughtLevel)
+
+// Sell: price crosses below SMA while RSI is not oversold (room to fall)
+sellSignal = (close < sma) and (close[1] > sma) and (rsi > oversoldLevel)
+
+// Entry logic
+if buySignal
+    strategy.entry("Long", strategy.long)
+
+if sellSignal
+    strategy.entry("Short", strategy.short)
+
+// Exit on RSI extremes
+if rsi > overboughtLevel
+    strategy.close("Long")
+
+if rsi < oversoldLevel
+    strategy.close("Short")

@@ -17,7 +17,7 @@ from ..schemas.dashboard import DashboardResponse
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
-@router.get("/", response_model=DashboardResponse)
+@router.get("", response_model=DashboardResponse)
 async def get_dashboard(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

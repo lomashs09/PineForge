@@ -43,6 +43,7 @@ class BacktestRequest(BaseModel):
     start: str = "2025-01-06"
     end: str = "2025-12-31"
     capital: float = 10000.0
+    quantity: Optional[float] = None
 
 
 class TradeResponse(BaseModel):

@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # MetaAPI (platform-level token)
     METAAPI_TOKEN: str = ""
 
+    # Auth
+    AUTH_DISABLED: bool = False  # Set True to bypass JWT auth (dev only)
+
     # App
     APP_ENV: str = "development"
     APP_HOST: str = "0.0.0.0"

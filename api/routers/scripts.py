@@ -1,6 +1,7 @@
 """Script routes — CRUD + backtest."""
 
 import re
+from datetime import datetime, timedelta
 from typing import List
 from uuid import UUID
 
@@ -22,10 +23,51 @@ from ..schemas.script import (
 )
 from ..services.script_service import run_backtest, validate_script
 
+# yfinance max lookback days per interval
+_INTERVAL_MAX_DAYS = {
+    "1d": 5 * 365,
+    "1h": 365 * 2,
+    "15m": 30,
+    "5m": 30,
+    "1m": 7,
+}
+
+_SYMBOLS = [
+    {"symbol": "XAUUSD", "name": "Gold", "category": "commodity"},
+    {"symbol": "XAGUSD", "name": "Silver", "category": "commodity"},
+    {"symbol": "EURUSD", "name": "EUR/USD", "category": "forex"},
+    {"symbol": "GBPUSD", "name": "GBP/USD", "category": "forex"},
+    {"symbol": "USDJPY", "name": "USD/JPY", "category": "forex"},
+    {"symbol": "BTCUSD", "name": "Bitcoin", "category": "crypto"},
+    {"symbol": "ETHUSD", "name": "Ethereum", "category": "crypto"},
+    {"symbol": "AAPL", "name": "Apple", "category": "stock"},
+    {"symbol": "SPY", "name": "S&P 500 ETF", "category": "stock"},
+    {"symbol": "OIL", "name": "Crude Oil", "category": "commodity"},
+]
+
+_INTERVALS = [
+    {"value": "1d", "label": "1 Day", "max_days": _INTERVAL_MAX_DAYS["1d"]},
+    {"value": "1h", "label": "1 Hour", "max_days": _INTERVAL_MAX_DAYS["1h"]},
+    {"value": "15m", "label": "15 Minutes", "max_days": _INTERVAL_MAX_DAYS["15m"]},
+    {"value": "5m", "label": "5 Minutes", "max_days": _INTERVAL_MAX_DAYS["5m"]},
+    {"value": "1m", "label": "1 Minute", "max_days": _INTERVAL_MAX_DAYS["1m"]},
+]
+
 router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 
 
-@router.get("/", response_model=List[ScriptSummary])
+@router.get("/backtest/config")
+async def get_backtest_config():
+    """Return available symbols, intervals, and date range limits."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    return {
+        "symbols": _SYMBOLS,
+        "intervals": _INTERVALS,
+        "today": today,
+    }
+
+
+@router.get("", response_model=List[ScriptSummary])
 async def list_scripts(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -54,7 +96,7 @@ async def get_script(
     return script
 
 
-@router.post("/", response_model=ScriptResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ScriptResponse, status_code=status.HTTP_201_CREATED)
 async def create_script(
     body: ScriptCreate,
     current_user: User = Depends(get_current_user),
@@ -146,14 +188,27 @@ async def backtest_script(
     if not script.is_system and script.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Enforce date range limits based on interval
+    max_days = _INTERVAL_MAX_DAYS.get(body.interval, 365)
+    earliest = (datetime.now() - timedelta(days=max_days)).strftime("%Y-%m-%d")
+    start = body.start
+    if start < earliest:
+        start = earliest
+
+    end = body.end
+    today = datetime.now().strftime("%Y-%m-%d")
+    if end > today:
+        end = today
+
     try:
         backtest_result = await run_backtest(
             source=script.source,
             symbol=body.symbol,
             interval=body.interval,
-            start=body.start,
-            end=body.end,
+            start=start,
+            end=end,
             capital=body.capital,
+            quantity=body.quantity,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Backtest failed: {str(e)}")

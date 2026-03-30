@@ -19,6 +19,7 @@ from ..schemas.broker_account import (
     AccountResponse,
 )
 from ..services.account_service import (
+    ProvisioningError,
     get_account_info,
     get_account_positions,
     provision_account,
@@ -27,7 +28,7 @@ from ..services.account_service import (
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 
-@router.get("/", response_model=List[AccountResponse])
+@router.get("", response_model=List[AccountResponse])
 async def list_accounts(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -41,7 +42,7 @@ async def list_accounts(
     return result.scalars().all()
 
 
-@router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 async def create_account(
     body: AccountProvisionRequest,
     current_user: User = Depends(get_current_user),
@@ -59,8 +60,10 @@ async def create_account(
             mt5_server=body.mt5_server,
             label=body.label,
         )
+    except ProvisioningError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"MetaAPI provisioning failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
     account = BrokerAccount(
         user_id=current_user.id,

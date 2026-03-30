@@ -6,11 +6,13 @@ from logging.config import fileConfig
 
 from dotenv import load_dotenv
 from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 
 load_dotenv()
+
+from api.database import Base, asyncpg_connect_args  # noqa: E402
 
 config = context.config
 
@@ -25,7 +27,6 @@ if config.config_file_name is not None:
 
 # Import all models so Alembic sees them
 from api.models import *  # noqa: F401, F403
-from api.database import Base
 
 target_metadata = Base.metadata
 
@@ -44,11 +45,12 @@ def do_run_migrations(connection):
 
 
 async def run_async_migrations():
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    url = config.get_main_option("sqlalchemy.url")
+    _kw = {"poolclass": pool.NullPool}
+    _ca = asyncpg_connect_args(url)
+    if _ca:
+        _kw["connect_args"] = _ca
+    connectable = create_async_engine(url, **_kw)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

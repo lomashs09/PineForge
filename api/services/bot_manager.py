@@ -28,6 +28,7 @@ class BotManager:
         self._running_bots: Dict[uuid.UUID, asyncio.Task] = {}
         self._bot_bridges: Dict[uuid.UUID, object] = {}  # LiveBridge instances
         self._bot_loggers: Dict[uuid.UUID, BotDatabaseHandler] = {}
+        self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
 
     async def start_bot(self, bot_id: uuid.UUID) -> None:
         """Load bot config from DB and start it as an asyncio task."""
@@ -88,6 +89,7 @@ class BotManager:
         # Store references
         self._bot_bridges[bot_id] = bridge
         self._bot_loggers[bot_id] = db_handler
+        self._bot_account_ids[bot_id] = account.metaapi_account_id
 
         # Create the asyncio task
         task = asyncio.create_task(self._run_bot_wrapper(bot_id, bridge, bot_logger, db_handler))
@@ -151,9 +153,37 @@ class BotManager:
             sys.stdout = original_stdout
             await db_handler.stop()
             bot_logger.removeHandler(db_handler)
+            await self._undeploy_account(bot_id)
             self._running_bots.pop(bot_id, None)
             self._bot_bridges.pop(bot_id, None)
             self._bot_loggers.pop(bot_id, None)
+            self._bot_account_ids.pop(bot_id, None)
+
+    async def _undeploy_account(self, bot_id: uuid.UUID) -> None:
+        """Undeploy the MetaAPI account so it stops consuming resources."""
+        metaapi_account_id = self._bot_account_ids.get(bot_id)
+        if not metaapi_account_id or not self._metaapi_token:
+            return
+
+        # Only undeploy if no OTHER running bot uses the same account
+        other_uses = any(
+            aid == metaapi_account_id
+            for bid, aid in self._bot_account_ids.items()
+            if bid != bot_id and bid in self._running_bots
+        )
+        if other_uses:
+            logger.info("Skipping undeploy for %s — other bots still using it", metaapi_account_id)
+            return
+
+        try:
+            from metaapi_cloud_sdk import MetaApi
+            api = MetaApi(token=self._metaapi_token)
+            account = await api.metatrader_account_api.get_account(metaapi_account_id)
+            if account.state in ("DEPLOYING", "DEPLOYED"):
+                await account.undeploy()
+                logger.info("Undeployed MetaAPI account %s", metaapi_account_id)
+        except Exception as e:
+            logger.warning("Failed to undeploy account %s: %s", metaapi_account_id, e)
 
     async def stop_bot(self, bot_id: uuid.UUID) -> None:
         """Gracefully stop a running bot."""
@@ -209,11 +239,15 @@ class BotManager:
 
     async def restart_crashed_bots(self) -> None:
         """On startup, restart bots that were running before server shutdown."""
-        async with self._session_factory() as db:
-            result = await db.execute(
-                select(Bot).where(Bot.status.in_(["running", "starting"]))
-            )
-            bots = result.scalars().all()
+        try:
+            async with self._session_factory() as db:
+                result = await db.execute(
+                    select(Bot).where(Bot.status.in_(["running", "starting"]))
+                )
+                bots = result.scalars().all()
+        except Exception as e:
+            logger.warning("Failed to query crashed bots: %s", e)
+            return
 
         for bot in bots:
             try:
