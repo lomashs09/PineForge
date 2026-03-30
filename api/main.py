@@ -32,6 +32,8 @@ async def lifespan(app: FastAPI):
     bot_manager = BotManager(
         session_factory=async_session,
         metaapi_token=settings.METAAPI_TOKEN,
+        mt5_backend=settings.MT5_BACKEND,
+        mt5_bridge_url=settings.MT5_BRIDGE_URL,
     )
     app.state.bot_manager = bot_manager
 

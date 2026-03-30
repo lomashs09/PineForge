@@ -828,8 +828,91 @@ deploy/pineforge-api.service
 ### Modified Files (4)
 
 ```
-pineforge/live/config.py          # Added script_source field, updated validate()
-pineforge/live/bridge.py          # Added _register_signals flag, script_source support, conditional signal handlers
-requirements.txt                   # Added FastAPI, SQLAlchemy, asyncpg, Alembic, JWT, bcrypt deps
-.env.example                       # Added DATABASE_URL, JWT, APP config vars
+pineforge/live/config.py          # Added script_source field, mt5_backend, mt5_bridge_url
+pineforge/live/bridge.py          # Connector-aware: uses MetaAPI or self-hosted bridge based on config
+requirements.txt                   # Added FastAPI, SQLAlchemy, asyncpg, Alembic, JWT, bcrypt, httpx deps
+.env.example                       # Added DATABASE_URL, JWT, APP, MT5_BACKEND, MT5_BRIDGE_URL
 ```
+
+---
+
+## Self-Hosted MT5 Bridge (Replaces MetaAPI)
+
+### Why
+
+MetaAPI charges ~$15-20/account/month. Their GitHub repos are client SDKs only (proprietary license). The server is closed-source. Self-hosting saves 85-90% at scale.
+
+### Architecture
+
+```
+PineForge API
+     │  MT5_BACKEND=bridge
+     │  HTTP calls to MT5_BRIDGE_URL
+     ▼
+mt5bridge (FastAPI, port 5555)     ← runs in Docker
+     │  MetaTrader5 Python package
+     ▼
+MT5 Terminal (Wine in Docker)
+     │  Broker protocol
+     ▼
+Exness MT5 Server
+```
+
+### Components
+
+```
+mt5bridge/
+├── app.py              # FastAPI server (lifespan, endpoints, auto-reconnect)
+├── mt5_wrapper.py      # Thread-safe wrapper around MetaTrader5 package
+├── schemas.py          # Pydantic request/response models
+├── config.py           # Environment config (MT5_LOGIN, MT5_PASSWORD, MT5_SERVER)
+├── Dockerfile          # Debian + Wine + MT5 terminal + bridge server
+├── docker-compose.yml  # Multi-account orchestration
+├── entrypoint.sh       # Starts Xvfb + MT5 + bridge
+├── requirements.txt    # fastapi, uvicorn, MetaTrader5, pydantic
+└── README.md
+```
+
+### Connector Abstraction (`pineforge/live/connector.py`)
+
+```python
+MT5Connector (abstract base class)
+├── MetaApiConnector   — wraps MetaAPI SDK (existing behavior)
+└── BridgeConnector    — calls self-hosted bridge REST API via httpx
+```
+
+`LiveBridge.run()` checks `config.mt5_backend`:
+- `"metaapi"` → uses MetaAPI SDK directly (unchanged)
+- `"bridge"` → creates `BridgeConnector` + `ConnectorExecutor`
+
+### Configuration
+
+```env
+# .env — switch backend
+MT5_BACKEND=bridge                          # or "metaapi"
+MT5_BRIDGE_URL=http://mt5bridge:5555        # self-hosted bridge URL
+```
+
+### Deployment
+
+Requires x86-64 VPS (Wine doesn't run on ARM). Hetzner CX22 ~$5/mo.
+
+```bash
+cd mt5bridge
+cp .env.example .env  # Set MT5 credentials
+docker-compose up -d  # Start MT5 + bridge
+```
+
+### Bridge API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Connection status |
+| POST | `/connect` | Login to MT5 `{login, password, server}` |
+| GET | `/account` | Balance, equity, margin |
+| POST | `/order/buy` | Market buy `{symbol, volume}` |
+| POST | `/order/sell` | Market sell `{symbol, volume}` |
+| POST | `/positions/close` | Close all `{symbol}` |
+| GET | `/positions` | Open positions |
+| POST | `/candles` | Historical OHLCV `{symbol, timeframe, count}` |
+

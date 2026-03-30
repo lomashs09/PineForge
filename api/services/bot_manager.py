@@ -22,9 +22,12 @@ logger = logging.getLogger(__name__)
 class BotManager:
     """Manages running bot asyncio tasks. One instance per FastAPI app."""
 
-    def __init__(self, session_factory: async_sessionmaker, metaapi_token: str):
+    def __init__(self, session_factory: async_sessionmaker, metaapi_token: str,
+                 mt5_backend: str = "metaapi", mt5_bridge_url: str = ""):
         self._session_factory = session_factory
         self._metaapi_token = metaapi_token
+        self._mt5_backend = mt5_backend
+        self._mt5_bridge_url = mt5_bridge_url
         self._running_bots: Dict[uuid.UUID, asyncio.Task] = {}
         self._bot_bridges: Dict[uuid.UUID, object] = {}  # LiveBridge instances
         self._bot_loggers: Dict[uuid.UUID, BotDatabaseHandler] = {}
@@ -68,6 +71,8 @@ class BotManager:
                 poll_interval_seconds=bot.poll_interval_seconds,
                 lookback_bars=bot.lookback_bars,
                 script_source=script.source,
+                mt5_backend=self._mt5_backend,
+                mt5_bridge_url=self._mt5_bridge_url,
             )
 
             bridge = LiveBridge(config)

@@ -36,6 +36,10 @@ class LiveConfig:
     script_path: str = ""
     script_source: str = ""  # If set, used instead of script_path (for API usage)
 
+    # MT5 backend: "metaapi" (default) or "bridge" (self-hosted)
+    mt5_backend: str = "metaapi"
+    mt5_bridge_url: str = ""  # URL of self-hosted bridge, e.g. "http://localhost:5555"
+
     def validate(self) -> list[str]:
         errors = []
         if not self.metaapi_token:

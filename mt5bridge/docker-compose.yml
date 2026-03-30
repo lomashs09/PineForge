@@ -1,0 +1,54 @@
+# MT5 Bridge — Multi-account deployment
+#
+# Each service = one MT5 account = one terminal instance.
+# Add more services for more accounts.
+#
+# Usage:
+#   cp .env.example .env    # Fill in your credentials
+#   docker-compose up -d    # Start all accounts
+#   docker-compose logs -f  # Watch logs
+#
+# Requirements:
+#   - x86-64 host (Wine does not work on ARM)
+#   - Docker + Docker Compose
+#   - ~1GB RAM per account (MT5 terminal + Wine overhead)
+
+services:
+  # Account 1 — example: Exness demo
+  mt5-account-1:
+    build: .
+    container_name: mt5bridge-1
+    restart: unless-stopped
+    ports:
+      - "5551:5555"
+    environment:
+      MT5_LOGIN: "${MT5_ACCOUNT1_LOGIN}"
+      MT5_PASSWORD: "${MT5_ACCOUNT1_PASSWORD}"
+      MT5_SERVER: "${MT5_ACCOUNT1_SERVER:-Exness-MT5Trial6}"
+      BRIDGE_PORT: "5555"
+    volumes:
+      - mt5data-1:/root/.wine/drive_c
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5555/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Account 2 — uncomment and configure for a second account
+  # mt5-account-2:
+  #   build: .
+  #   container_name: mt5bridge-2
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5552:5555"
+  #   environment:
+  #     MT5_LOGIN: "${MT5_ACCOUNT2_LOGIN}"
+  #     MT5_PASSWORD: "${MT5_ACCOUNT2_PASSWORD}"
+  #     MT5_SERVER: "${MT5_ACCOUNT2_SERVER:-Exness-MT5Real}"
+  #     BRIDGE_PORT: "5555"
+  #   volumes:
+  #     - mt5data-2:/root/.wine/drive_c
+
+volumes:
+  mt5data-1:
+  # mt5data-2:

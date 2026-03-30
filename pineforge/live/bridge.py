@@ -61,6 +61,7 @@ class LiveBridge:
         self._ohlc4_s = Series()
         self._bar_index_s = Series()
         self._bar_count = 0
+        self._connector = None  # Set when using bridge backend
 
     def _init_interpreter(self):
         """Parse the script and set up the interpreter."""
@@ -141,8 +142,6 @@ class LiveBridge:
 
     async def run(self):
         """Main live trading loop."""
-        from metaapi_cloud_sdk import MetaApi
-
         cfg = self.config
         mode_str = "LIVE" if cfg.is_live else "DRY RUN"
 
@@ -155,6 +154,7 @@ class LiveBridge:
         print(f"  Timeframe: {cfg.timeframe}", flush=True)
         print(f"  Lot size:  {cfg.lot_size}", flush=True)
         print(f"  Poll:      every {cfg.poll_interval_seconds}s", flush=True)
+        print(f"  Backend:   {cfg.mt5_backend}", flush=True)
         if not cfg.is_live:
             print(flush=True)
             print("  ** DRY RUN — no real orders will be placed **", flush=True)
@@ -162,36 +162,57 @@ class LiveBridge:
         print("=" * 60, flush=True)
         print(flush=True)
 
-        print("Connecting to MetaAPI...", flush=True)
-        api = MetaApi(token=cfg.metaapi_token)
-        account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+        # ── Connect to MT5 (MetaAPI or self-hosted bridge) ────────────
+        account = None  # Only used by MetaAPI for candle fetching
+        connection = None  # MetaAPI RPC connection
+        connector = None  # Self-hosted bridge connector
 
-        print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
+        if cfg.mt5_backend == "bridge":
+            from .connector import create_connector
+            from .connector_executor import ConnectorExecutor
 
-        if account.state not in ("DEPLOYING", "DEPLOYED"):
-            try:
-                print("Deploying MT5 account...", flush=True)
-                await account.deploy()
-            except Exception as e:
-                print(f"Deploy note: {e}", flush=True)
-                print("Continuing — account may already be provisioned...", flush=True)
+            print(f"Connecting to MT5 bridge at {cfg.mt5_bridge_url}...", flush=True)
+            connector = create_connector(
+                backend="bridge",
+                bridge_url=cfg.mt5_bridge_url,
+            )
+            await connector.connect()
+            print("Connected to MT5 via self-hosted bridge.\n", flush=True)
 
-        print("Waiting for MT5 connection...", flush=True)
-        try:
-            await account.wait_connected(timeout_in_seconds=60)
-        except Exception as e:
-            print(f"Connection timeout: {e}", flush=True)
-            print("Retrying with account reload...", flush=True)
+            executor = ConnectorExecutor(connector, cfg.symbol, cfg.is_live)
+        else:
+            from metaapi_cloud_sdk import MetaApi
+
+            print("Connecting to MetaAPI...", flush=True)
+            api = MetaApi(token=cfg.metaapi_token)
             account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+
             print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
-            await account.wait_connected(timeout_in_seconds=120)
 
-        connection = account.get_rpc_connection()
-        await connection.connect()
-        await connection.wait_synchronized(timeout_in_seconds=120)
-        print("Connected to MT5 account.\n", flush=True)
+            if account.state not in ("DEPLOYING", "DEPLOYED"):
+                try:
+                    print("Deploying MT5 account...", flush=True)
+                    await account.deploy()
+                except Exception as e:
+                    print(f"Deploy note: {e}", flush=True)
+                    print("Continuing — account may already be provisioned...", flush=True)
 
-        executor = Executor(connection, cfg.symbol, cfg.is_live)
+            print("Waiting for MT5 connection...", flush=True)
+            try:
+                await account.wait_connected(timeout_in_seconds=60)
+            except Exception as e:
+                print(f"Connection timeout: {e}", flush=True)
+                print("Retrying with account reload...", flush=True)
+                account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+                print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
+                await account.wait_connected(timeout_in_seconds=120)
+
+            connection = account.get_rpc_connection()
+            await connection.connect()
+            await connection.wait_synchronized(timeout_in_seconds=120)
+            print("Connected to MT5 account.\n", flush=True)
+
+            executor = Executor(connection, cfg.symbol, cfg.is_live)
 
         acct_info = await executor.get_account_info()
         if acct_info:
@@ -202,8 +223,13 @@ class LiveBridge:
 
         self._init_interpreter()
 
+        # ── Fetch warmup bars ─────────────────────────────────────────
         print(f"Fetching {cfg.lookback_bars} historical bars for warmup...", flush=True)
-        bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        if connector:
+            raw = await connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+            bars = raw  # Already list of dicts with open/high/low/close/volume/date
+        else:
+            bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if len(bars) < 10:
             print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr, flush=True)
             return
@@ -223,6 +249,8 @@ class LiveBridge:
         self._start_time = datetime.now(timezone.utc)
         self._last_heartbeat = self._start_time
 
+        self._connector = connector  # Store for _poll_cycle candle fetching
+
         while not self._shutdown:
             try:
                 await self._poll_cycle(account, executor, cfg)
@@ -237,7 +265,10 @@ class LiveBridge:
             await asyncio.sleep(cfg.poll_interval_seconds)
 
         print("\nShutting down...", flush=True)
-        await connection.close()
+        if connector:
+            await connector.disconnect()
+        elif connection:
+            await connection.close()
         print("Disconnected. Goodbye.", flush=True)
 
     def _print_heartbeat_if_due(self):
@@ -253,7 +284,7 @@ class LiveBridge:
         print(f"[{ts}] HEARTBEAT | uptime: {hours}h {minutes}m | polls: {self._poll_count} | "
               f"bars processed: {self._bar_count}", flush=True)
 
-    async def _poll_cycle(self, account, executor: Executor, cfg: LiveConfig):
+    async def _poll_cycle(self, account, executor, cfg: LiveConfig):
         """One iteration of the main loop.
 
         Uses "next open" execution: when a new bar arrives, first execute the
@@ -262,7 +293,10 @@ class LiveBridge:
         the default backtest fill mode (fill_on="next_open") and avoids
         same-bar stop-outs that kill profitability.
         """
-        bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        if self._connector:
+            bars = await self._connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        else:
+            bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if not bars:
             return
 
