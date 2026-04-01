@@ -1,9 +1,7 @@
 # MT5 Bridge — Self-hosted MetaTrader 5 REST API
 #
 # Architecture:
-#   Linux Python (FastAPI) → RPyC → Wine Python (MetaTrader5) → MT5 Terminal
-#
-# Uses Python embed (zip, no installer) inside Wine prefix.
+#   Linux Python (FastAPI) → RPyC → Wine Python 3.9 (MetaTrader5) → MT5 Terminal
 
 FROM ubuntu:22.04
 
@@ -11,7 +9,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
     WINEPREFIX=/root/.wine \
     WINEARCH=win64 \
-    DISPLAY=:0
+    DISPLAY=:0 \
+    WINE_PYTHON_PATH="C:\\Python\\python.exe"
 
 # ── System + Wine ─────────────────────────────────────────────────────
 RUN dpkg --add-architecture i386 && \
@@ -34,25 +33,22 @@ RUN dpkg --add-architecture i386 && \
 # ── Wine init ─────────────────────────────────────────────────────────
 RUN xvfb-run wine64 wineboot --init 2>/dev/null || true
 
-# ── Portable Python in Wine (no installer needed) ─────────────────────
-RUN mkdir -p /root/.wine/drive_c/Python312 && \
-    wget -q "https://www.python.org/ftp/python/3.12.3/python-3.12.3-embed-amd64.zip" -O /tmp/python.zip && \
-    unzip -q /tmp/python.zip -d /root/.wine/drive_c/Python312/ && \
+# ── Portable Python 3.9 in Wine ──────────────────────────────────────
+RUN mkdir -p /root/.wine/drive_c/Python && \
+    wget -q "https://www.python.org/ftp/python/3.9.13/python-3.9.13-embed-amd64.zip" -O /tmp/python.zip && \
+    unzip -q /tmp/python.zip -d /root/.wine/drive_c/Python/ && \
     rm /tmp/python.zip && \
-    # Enable pip by uncommenting import site in python312._pth
-    sed -i 's/#import site/import site/' /root/.wine/drive_c/Python312/python312._pth && \
-    # Install pip
+    # Enable imports by uncommenting import site
+    sed -i 's/#import site/import site/' /root/.wine/drive_c/Python/python39._pth && \
+    # Install pip via get-pip.py
     wget -q "https://bootstrap.pypa.io/get-pip.py" -O /tmp/get-pip.py && \
-    wine64 /root/.wine/drive_c/Python312/python.exe /tmp/get-pip.py 2>/dev/null && \
+    wine64 "C:\\Python\\python.exe" /tmp/get-pip.py 2>/dev/null && \
     rm /tmp/get-pip.py && \
-    echo "=== Wine Python ready ==="
-
-# Shortcut for wine python
-ENV WINE_PYTHON="wine64 /root/.wine/drive_c/Python312/python.exe"
+    echo "=== Wine Python 3.9 ready ==="
 
 # ── Install MetaTrader5 + RPyC in Wine Python ────────────────────────
-RUN $WINE_PYTHON -m pip install MetaTrader5 rpyc 2>/dev/null && \
-    echo "=== MT5 + RPyC installed in Wine Python ==="
+RUN wine64 "C:\\Python\\python.exe" -m pip install MetaTrader5 rpyc 2>/dev/null && \
+    echo "=== MT5 + RPyC installed ==="
 
 # ── Download and install MetaTrader 5 terminal ───────────────────────
 RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -O /tmp/mt5setup.exe && \
@@ -62,7 +58,7 @@ RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5s
     echo "=== MT5 terminal ===" && \
     find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1 || true
 
-# ── Linux Python (FastAPI bridge server) ──────────────────────────────
+# ── Linux Python (FastAPI bridge) ─────────────────────────────────────
 WORKDIR /app
 RUN python3 -m venv /app/venv && \
     /app/venv/bin/pip install --no-cache-dir \
