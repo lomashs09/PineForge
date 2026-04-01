@@ -1,7 +1,7 @@
 # MT5 Bridge — Self-hosted MetaTrader 5 REST API
 #
-# Architecture:
-#   Linux Python (FastAPI) → RPyC → Wine Python 3.9 (MetaTrader5) → MT5 Terminal
+# Uses Wine 9+ (WineHQ) which implements the CRT functions needed by MT5/numpy.
+# Ubuntu 22.04 default Wine 6 is too old (missing fetestexcept etc).
 
 FROM ubuntu:22.04
 
@@ -9,36 +9,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
     WINEPREFIX=/root/.wine \
     WINEARCH=win64 \
-    DISPLAY=:0 \
-    WINE_PYTHON_PATH="C:\\Python\\python.exe"
+    DISPLAY=:0
 
-# ── System + Wine ─────────────────────────────────────────────────────
+# ── WineHQ stable (Wine 9+) ──────────────────────────────────────────
 RUN dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        wine64 \
-        wine32 \
-        xvfb \
-        xauth \
-        wget \
-        unzip \
-        cabextract \
-        curl \
-        python3 \
-        python3-pip \
-        python3-venv \
-        && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+        software-properties-common wget gnupg2 \
+        xvfb xauth unzip cabextract curl \
+        python3 python3-pip python3-venv && \
+    # Add WineHQ repo
+    mkdir -pm755 /etc/apt/keyrings && \
+    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key 2>/dev/null && \
+    echo "deb [signed-by=/etc/apt/keyrings/winehq-archive.key] https://dl.winehq.org/wine-builds/ubuntu/ jammy main" > /etc/apt/sources.list.d/winehq.list && \
+    apt-get update && \
+    apt-get install -y --install-recommends winehq-stable && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    # Verify wine version
+    wine64 --version
 
-# ── Wine init + Visual C++ runtime ────────────────────────────────────
-# Ubuntu 22.04 installs wine as wine64-stable — create symlinks
-RUN ln -sf /usr/bin/wine64-stable /usr/local/bin/wine64 && \
-    ln -sf /usr/bin/wine64-stable /usr/local/bin/wine && \
-    xvfb-run wine64 wineboot --init 2>/dev/null || true && \
-    # Install VC++ runtime (provides api-ms-win-crt-* DLLs needed by MT5/numpy)
-    wget -q https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -O /usr/local/bin/winetricks && \
-    chmod +x /usr/local/bin/winetricks && \
-    xvfb-run winetricks -q vcrun2019 2>/dev/null || true
+# ── Wine init ─────────────────────────────────────────────────────────
+RUN xvfb-run wineboot --init 2>/dev/null || true
 
 # ── Portable Python 3.9 in Wine ──────────────────────────────────────
 ENV WINEPY=/root/.wine/drive_c/Python/python.exe
@@ -53,7 +44,6 @@ RUN mkdir -p /root/.wine/drive_c/Python && \
     echo "=== Wine Python 3.9 ready ==="
 
 # ── Install MetaTrader5 + RPyC in Wine Python ────────────────────────
-# Pin rpyc<6 to match mt5linux compatibility
 RUN wine64 $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
     echo "=== MT5 + RPyC installed ==="
 
