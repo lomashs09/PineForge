@@ -31,7 +31,10 @@ RUN dpkg --add-architecture i386 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── Wine init ─────────────────────────────────────────────────────────
-RUN xvfb-run wine64 wineboot --init 2>/dev/null || true
+# Ubuntu 22.04 installs wine as wine64-stable — create symlinks
+RUN ln -sf /usr/bin/wine64-stable /usr/local/bin/wine64 && \
+    ln -sf /usr/bin/wine64-stable /usr/local/bin/wine && \
+    xvfb-run wine64 wineboot --init 2>/dev/null || true
 
 # ── Portable Python 3.9 in Wine ──────────────────────────────────────
 ENV WINEPY=/root/.wine/drive_c/Python/python.exe
