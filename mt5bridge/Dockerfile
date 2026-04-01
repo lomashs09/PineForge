@@ -1,12 +1,10 @@
 # MT5 Bridge — Self-hosted MetaTrader 5 REST API
 #
-# Based on proven approaches from gmag11/MetaTrader5-Docker and
-# ejtraderLabs/Metatrader5-Docker.
+# Runs MT5 terminal via Wine on Linux, exposes REST API for PineForge.
+# Requires x86-64 host.
 #
 # Build:  docker build -t mt5bridge .
 # Run:    docker run -e MT5_LOGIN=123 -e MT5_PASSWORD=xxx -e MT5_SERVER=Exness-MT5Trial6 -p 5555:5555 mt5bridge
-#
-# Requires x86-64 host (Wine does not run on ARM).
 
 FROM ubuntu:22.04
 
@@ -16,43 +14,34 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEARCH=win64 \
     DISPLAY=:0
 
-# ── System + Wine repo ────────────────────────────────────────────────
-RUN apt-get update && \
+# ── System + Wine from default Ubuntu repos ───────────────────────────
+RUN dpkg --add-architecture i386 && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
-        software-properties-common \
-        wget \
-        gnupg2 \
-        curl \
+        wine64 \
+        wine32 \
         xvfb \
         xauth \
+        wget \
         cabextract \
+        curl \
         python3 \
         python3-pip \
         python3-venv \
         && \
-    # Add WineHQ repo for latest stable Wine
-    dpkg --add-architecture i386 && \
-    mkdir -pm755 /etc/apt/keyrings && \
-    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key && \
-    wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources && \
-    apt-get update && \
-    apt-get install -y --install-recommends winehq-stable && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── Wine init ─────────────────────────────────────────────────────────
-RUN xvfb-run wineboot --init && \
-    # Install Visual C++ runtime (needed by MT5)
-    wget -q https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -O /usr/local/bin/winetricks && \
-    chmod +x /usr/local/bin/winetricks && \
-    xvfb-run winetricks -q vcrun2019 || true
+RUN xvfb-run wine64 wineboot --init 2>/dev/null || true
 
 # ── Download and install MetaTrader 5 ────────────────────────────────
 RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -O /tmp/mt5setup.exe && \
-    xvfb-run wine64 /tmp/mt5setup.exe /auto && \
+    xvfb-run wine64 /tmp/mt5setup.exe /auto 2>/dev/null && \
     sleep 5 && \
     rm -f /tmp/mt5setup.exe && \
-    echo "MT5 installed at:" && \
-    find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1
+    echo "=== MT5 installed ===" && \
+    find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1 || \
+    echo "WARNING: terminal64.exe not found, MT5 may need manual install"
 
 # ── Python environment ────────────────────────────────────────────────
 WORKDIR /app
