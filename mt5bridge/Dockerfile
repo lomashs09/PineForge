@@ -49,7 +49,8 @@ RUN mkdir -p /root/.wine/drive_c/Python && \
     echo "=== Wine Python 3.9 ready ==="
 
 # ── Install MetaTrader5 + RPyC in Wine Python ────────────────────────
-RUN wine64 $WINEPY -m pip install MetaTrader5 rpyc 2>/dev/null; \
+# Pin rpyc<6 to match mt5linux compatibility
+RUN wine64 $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
     echo "=== MT5 + RPyC installed ==="
 
 # ── Download and install MetaTrader 5 terminal ───────────────────────
@@ -68,7 +69,7 @@ RUN python3 -m venv /app/venv && \
         "uvicorn[standard]>=0.34.0" \
         pydantic>=2.0.0 \
         mt5linux>=0.2.0 \
-        rpyc>=6.0.0
+        "rpyc>=5,<6"
 
 # ── Bridge code ───────────────────────────────────────────────────────
 COPY . /app/mt5bridge/
