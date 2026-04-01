@@ -10,16 +10,18 @@ echo "Port: ${BRIDGE_PORT:-5555}"
 Xvfb :0 -screen 0 1024x768x16 &
 sleep 2
 
-# Start MT5 terminal in the background
+# Find MT5 terminal
 MT5_EXE=$(find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1)
 if [ -z "$MT5_EXE" ]; then
     echo "ERROR: MT5 terminal64.exe not found!"
+    echo "Searching for any .exe in wine prefix:"
+    find /root/.wine -name "*.exe" 2>/dev/null | head -10
     exit 1
 fi
 
 echo "Starting MT5 terminal: $MT5_EXE"
-wine "$MT5_EXE" /portable &
-sleep 5  # Give MT5 time to start
+wine64 "$MT5_EXE" /portable &
+sleep 10  # Give MT5 time to start and connect
 
 # Export MT5 path for the bridge
 export MT5_PATH="$MT5_EXE"
