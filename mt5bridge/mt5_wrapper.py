@@ -37,7 +37,7 @@ def _start_rpyc_server():
 
     logger.info("Starting RPyC server in Wine Python...")
     _rpyc_server = subprocess.Popen(
-        ["wine64", "python", "-c",
+        ["wine", "python", "-c",
          "from rpyc.utils.server import ThreadedServer; "
          "from rpyc import SlaveService; "
          "t = ThreadedServer(SlaveService, port=18812, "

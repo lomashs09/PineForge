@@ -26,7 +26,7 @@ RUN dpkg --add-architecture i386 && \
     apt-get install -y --install-recommends winehq-stable && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     # Verify wine version
-    wine64 --version
+    wine --version
 
 # ── Wine init ─────────────────────────────────────────────────────────
 RUN xvfb-run wineboot --init 2>/dev/null || true
@@ -39,17 +39,17 @@ RUN mkdir -p /root/.wine/drive_c/Python && \
     rm /tmp/python.zip && \
     sed -i 's/#import site/import site/' /root/.wine/drive_c/Python/python39._pth && \
     wget -q "https://bootstrap.pypa.io/get-pip.py" -O /tmp/get-pip.py && \
-    wine64 $WINEPY /tmp/get-pip.py 2>/dev/null; \
+    wine $WINEPY /tmp/get-pip.py 2>/dev/null; \
     rm /tmp/get-pip.py && \
     echo "=== Wine Python 3.9 ready ==="
 
 # ── Install MetaTrader5 + RPyC in Wine Python ────────────────────────
-RUN wine64 $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
+RUN wine $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
     echo "=== MT5 + RPyC installed ==="
 
 # ── Download and install MetaTrader 5 terminal ───────────────────────
 RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -O /tmp/mt5setup.exe && \
-    xvfb-run wine64 /tmp/mt5setup.exe /auto 2>/dev/null; \
+    xvfb-run wine /tmp/mt5setup.exe /auto 2>/dev/null; \
     sleep 5 && \
     rm -f /tmp/mt5setup.exe && \
     echo "=== MT5 terminal ===" && \

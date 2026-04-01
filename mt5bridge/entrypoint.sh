@@ -17,7 +17,7 @@ sleep 2
 MT5_EXE=$(find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1)
 if [ -n "$MT5_EXE" ]; then
     echo "Starting MT5: $MT5_EXE"
-    wine64 "$MT5_EXE" /portable &
+    wine "$MT5_EXE" /portable &
     sleep 10
     export MT5_PATH="$MT5_EXE"
 else
@@ -26,7 +26,7 @@ fi
 
 # RPyC server in Wine Python (bridges Linux → Wine for MetaTrader5 package)
 echo "Starting RPyC server..."
-wine64 "$WINE_PY" -c "
+wine "$WINE_PY" -c "
 from rpyc.utils.server import ThreadedServer
 from rpyc import SlaveService
 t = ThreadedServer(SlaveService, port=18812, protocol_config={'allow_public_attrs': True, 'allow_all_attrs': True})
