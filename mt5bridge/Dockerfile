@@ -34,20 +34,19 @@ RUN dpkg --add-architecture i386 && \
 RUN xvfb-run wine64 wineboot --init 2>/dev/null || true
 
 # ── Portable Python 3.9 in Wine ──────────────────────────────────────
+ENV WINEPY=/root/.wine/drive_c/Python/python.exe
 RUN mkdir -p /root/.wine/drive_c/Python && \
     wget -q "https://www.python.org/ftp/python/3.9.13/python-3.9.13-embed-amd64.zip" -O /tmp/python.zip && \
     unzip -q /tmp/python.zip -d /root/.wine/drive_c/Python/ && \
     rm /tmp/python.zip && \
-    # Enable imports by uncommenting import site
     sed -i 's/#import site/import site/' /root/.wine/drive_c/Python/python39._pth && \
-    # Install pip via get-pip.py
     wget -q "https://bootstrap.pypa.io/get-pip.py" -O /tmp/get-pip.py && \
-    wine64 "C:\\Python\\python.exe" /tmp/get-pip.py 2>/dev/null && \
+    wine64 $WINEPY /tmp/get-pip.py 2>/dev/null; \
     rm /tmp/get-pip.py && \
     echo "=== Wine Python 3.9 ready ==="
 
 # ── Install MetaTrader5 + RPyC in Wine Python ────────────────────────
-RUN wine64 "C:\\Python\\python.exe" -m pip install MetaTrader5 rpyc 2>/dev/null && \
+RUN wine64 $WINEPY -m pip install MetaTrader5 rpyc 2>/dev/null; \
     echo "=== MT5 + RPyC installed ==="
 
 # ── Download and install MetaTrader 5 terminal ───────────────────────

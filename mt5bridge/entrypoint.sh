@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-WINE_PY='C:\Python\python.exe'
+WINE_PY="/root/.wine/drive_c/Python/python.exe"
 
 echo "=== MT5 Bridge Starting ==="
 echo "Login: ${MT5_LOGIN:-not set}"
