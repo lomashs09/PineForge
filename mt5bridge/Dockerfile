@@ -22,11 +22,13 @@ RUN dpkg --add-architecture i386 && \
         wine64 \
         wine32 \
         xvfb \
+        xauth \
         wget \
         cabextract \
         python3 \
         python3-pip \
         python3-venv \
+        curl \
         && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
