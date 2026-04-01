@@ -30,11 +30,15 @@ RUN dpkg --add-architecture i386 && \
         && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ── Wine init ─────────────────────────────────────────────────────────
+# ── Wine init + Visual C++ runtime ────────────────────────────────────
 # Ubuntu 22.04 installs wine as wine64-stable — create symlinks
 RUN ln -sf /usr/bin/wine64-stable /usr/local/bin/wine64 && \
     ln -sf /usr/bin/wine64-stable /usr/local/bin/wine && \
-    xvfb-run wine64 wineboot --init 2>/dev/null || true
+    xvfb-run wine64 wineboot --init 2>/dev/null || true && \
+    # Install VC++ runtime (provides api-ms-win-crt-* DLLs needed by MT5/numpy)
+    wget -q https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -O /usr/local/bin/winetricks && \
+    chmod +x /usr/local/bin/winetricks && \
+    xvfb-run winetricks -q vcrun2019 2>/dev/null || true
 
 # ── Portable Python 3.9 in Wine ──────────────────────────────────────
 ENV WINEPY=/root/.wine/drive_c/Python/python.exe
