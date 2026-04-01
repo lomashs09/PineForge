@@ -8,7 +8,8 @@ echo "Login: ${MT5_LOGIN:-not set}"
 echo "Server: ${MT5_SERVER:-not set}"
 echo "Port: ${BRIDGE_PORT:-5555}"
 
-# Virtual display
+# Virtual display (clean up stale locks from previous runs)
+rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 Xvfb :0 -screen 0 1024x768x16 &
 sleep 2
 
