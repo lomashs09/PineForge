@@ -24,7 +24,7 @@ else
     echo "WARNING: MT5 terminal not found"
 fi
 
-# RPyC server in Wine Python
+# RPyC server in Wine Python (bridges Linux → Wine for MetaTrader5 package)
 echo "Starting RPyC server..."
 wine64 "$WINE_PY" -c "
 from rpyc.utils.server import ThreadedServer
@@ -32,8 +32,22 @@ from rpyc import SlaveService
 t = ThreadedServer(SlaveService, port=18812, protocol_config={'allow_public_attrs': True, 'allow_all_attrs': True})
 t.start()
 " &
-sleep 5
-echo "RPyC server ready"
+RPYC_PID=$!
+
+# Wait for RPyC to be ready (retry up to 30 seconds)
+echo "Waiting for RPyC server..."
+for i in $(seq 1 30); do
+    if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('localhost',18812)); s.close()" 2>/dev/null; then
+        echo "RPyC server ready (took ${i}s)"
+        break
+    fi
+    sleep 1
+done
+
+if ! kill -0 $RPYC_PID 2>/dev/null; then
+    echo "ERROR: RPyC server died"
+    exit 1
+fi
 
 # FastAPI bridge
 echo "Starting bridge on port ${BRIDGE_PORT:-5555}..."
