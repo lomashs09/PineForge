@@ -8,23 +8,23 @@ echo "Login: ${MT5_LOGIN:-not set}"
 echo "Server: ${MT5_SERVER:-not set}"
 echo "Port: ${BRIDGE_PORT:-5555}"
 
-# Virtual display (clean up stale locks from previous runs)
+# Virtual display (clean up stale locks)
 rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 Xvfb :0 -screen 0 1024x768x16 &
 sleep 2
 
-# MT5 terminal
+# Start MT5 terminal if present (may not be on first run)
 MT5_EXE=$(find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1)
 if [ -n "$MT5_EXE" ]; then
     echo "Starting MT5: $MT5_EXE"
     wine "$MT5_EXE" /portable &
-    sleep 10
+    sleep 5
     export MT5_PATH="$MT5_EXE"
 else
-    echo "WARNING: MT5 terminal not found"
+    echo "MT5 terminal not pre-installed — Python package will handle it"
 fi
 
-# RPyC server in Wine Python (bridges Linux → Wine for MetaTrader5 package)
+# RPyC server (bridges Linux Python → Wine Python for MetaTrader5 package)
 echo "Starting RPyC server..."
 wine "$WINE_PY" -c "
 from rpyc.utils.server import ThreadedServer
@@ -34,7 +34,7 @@ t.start()
 " &
 RPYC_PID=$!
 
-# Wait for RPyC to be ready (retry up to 30 seconds)
+# Wait for RPyC to be ready
 echo "Waiting for RPyC server..."
 for i in $(seq 1 30); do
     if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('localhost',18812)); s.close()" 2>/dev/null; then

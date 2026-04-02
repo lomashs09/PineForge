@@ -47,13 +47,11 @@ RUN mkdir -p /root/.wine/drive_c/Python && \
 RUN wine $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
     echo "=== MT5 + RPyC installed ==="
 
-# ── Download and install MetaTrader 5 terminal ───────────────────────
-RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -O /tmp/mt5setup.exe && \
-    xvfb-run wine /tmp/mt5setup.exe /auto 2>/dev/null; \
-    sleep 5 && \
-    rm -f /tmp/mt5setup.exe && \
-    echo "=== MT5 terminal ===" && \
-    find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1 || true
+# ── MetaTrader 5 terminal ─────────────────────────────────────────────
+# The MT5 installer hangs under headless Wine. Instead, let the
+# MetaTrader5 Python package download the terminal on first initialize().
+# It will auto-install to the Wine prefix when mt5.initialize() is called.
+# If you want to pre-install, mount a volume with a working MT5 install.
 
 # ── Linux Python (FastAPI bridge) ─────────────────────────────────────
 WORKDIR /app
