@@ -1,67 +1,27 @@
 # MT5 Bridge — Self-hosted MetaTrader 5 REST API
 #
-# Uses Wine 11 (WineHQ) + noVNC for browser-based MT5 access.
-# First run: open http://<host>:6080 to install MT5 via browser.
+# Based on gmag11/MetaTrader5-Docker which has a working MT5 install.
+# Adds our FastAPI bridge server + RPyC + noVNC.
 
-FROM ubuntu:22.04
+FROM gmag11/metatrader5:latest
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    WINEDLLOVERRIDES="mscoree,mshtml=" \
-    WINEPREFIX=/root/.wine \
-    WINEARCH=win64 \
-    DISPLAY=:0
+ENV DISPLAY=:0 \
+    WINEDEBUG=-all
 
-# ── WineHQ stable + noVNC ────────────────────────────────────────────
-RUN dpkg --add-architecture i386 && \
-    apt-get update && \
+USER root
+
+# ── Additional packages ───────────────────────────────────────────────
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        software-properties-common wget gnupg2 \
-        xvfb xauth unzip cabextract curl \
+        python3 python3-pip python3-venv \
         x11vnc novnc websockify \
-        python3 python3-pip python3-venv && \
-    # WineHQ repo
-    mkdir -pm755 /etc/apt/keyrings && \
-    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key 2>/dev/null && \
-    echo "deb [signed-by=/etc/apt/keyrings/winehq-archive.key] https://dl.winehq.org/wine-builds/ubuntu/ jammy main" > /etc/apt/sources.list.d/winehq.list && \
-    apt-get update && \
-    apt-get install -y --install-recommends winehq-stable && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    wine --version
+        curl && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ── Wine init ─────────────────────────────────────────────────────────
-# Disable Wine debugger (MT5 installer detects it and refuses to run)
-ENV WINEDEBUG=-all
-RUN xvfb-run wineboot --init 2>/dev/null || true && \
-    # Disable winedbg so MT5 doesn't see a debugger
-    echo 'HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\AeDebug' > /tmp/reg.reg && \
-    echo '"Debugger"=""' >> /tmp/reg.reg && \
-    echo '"Auto"="0"' >> /tmp/reg.reg && \
-    wine regedit /tmp/reg.reg 2>/dev/null || true && \
-    rm -f /tmp/reg.reg && \
-    # Remove winedbg
-    rm -f /opt/wine-stable/bin/winedbg 2>/dev/null; \
-    find / -name "winedbg*" -delete 2>/dev/null || true
-
-# ── Portable Python 3.9 in Wine ──────────────────────────────────────
-ENV WINEPY=/root/.wine/drive_c/Python/python.exe
-RUN mkdir -p /root/.wine/drive_c/Python && \
-    wget -q "https://www.python.org/ftp/python/3.9.13/python-3.9.13-embed-amd64.zip" -O /tmp/python.zip && \
-    unzip -q /tmp/python.zip -d /root/.wine/drive_c/Python/ && \
-    rm /tmp/python.zip && \
-    sed -i 's/#import site/import site/' /root/.wine/drive_c/Python/python39._pth && \
-    wget -q "https://bootstrap.pypa.io/get-pip.py" -O /tmp/get-pip.py && \
-    wine $WINEPY /tmp/get-pip.py 2>/dev/null; \
-    rm /tmp/get-pip.py && \
-    echo "=== Wine Python 3.9 ready ==="
-
-# ── MetaTrader5 + RPyC in Wine Python ────────────────────────────────
-RUN wine $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
-    echo "=== MT5 + RPyC installed ==="
-
-# ── Download MT5 installer (user runs it via VNC on first boot) ───────
-RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" \
-    -O /root/.wine/drive_c/mt5setup.exe && \
-    echo "=== MT5 installer downloaded to C:\\mt5setup.exe ==="
+# ── Install rpyc in Wine Python (gmag11 image already has MT5 + Python) ──
+# gmag11 image has RPyC server on port 8001, we can use that directly
+# But let's also ensure rpyc version compatibility
+RUN wine /root/.wine/drive_c/Python312/python.exe -m pip install "rpyc>=5,<6" MetaTrader5 2>/dev/null || true
 
 # ── Linux Python (FastAPI bridge) ─────────────────────────────────────
 WORKDIR /app
