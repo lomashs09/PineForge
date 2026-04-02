@@ -27,8 +27,8 @@ from ..services.script_service import run_backtest, validate_script
 _INTERVAL_MAX_DAYS = {
     "1d": 5 * 365,
     "1h": 365 * 2,
-    "15m": 30,
-    "5m": 30,
+    "15m": 60,
+    "5m": 60,
     "1m": 7,
 }
 
