@@ -29,7 +29,18 @@ RUN dpkg --add-architecture i386 && \
     wine --version
 
 # ── Wine init ─────────────────────────────────────────────────────────
-RUN xvfb-run wineboot --init 2>/dev/null || true
+# Disable Wine debugger (MT5 installer detects it and refuses to run)
+ENV WINEDEBUG=-all
+RUN xvfb-run wineboot --init 2>/dev/null || true && \
+    # Disable winedbg so MT5 doesn't see a debugger
+    echo 'HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\AeDebug' > /tmp/reg.reg && \
+    echo '"Debugger"=""' >> /tmp/reg.reg && \
+    echo '"Auto"="0"' >> /tmp/reg.reg && \
+    wine regedit /tmp/reg.reg 2>/dev/null || true && \
+    rm -f /tmp/reg.reg && \
+    # Remove winedbg
+    rm -f /opt/wine-stable/bin/winedbg 2>/dev/null; \
+    find / -name "winedbg*" -delete 2>/dev/null || true
 
 # ── Portable Python 3.9 in Wine ──────────────────────────────────────
 ENV WINEPY=/root/.wine/drive_c/Python/python.exe

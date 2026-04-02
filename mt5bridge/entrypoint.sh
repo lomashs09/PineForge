@@ -2,6 +2,7 @@
 set -e
 
 WINE_PY="/root/.wine/drive_c/Python/python.exe"
+export WINEDEBUG=-all
 
 echo "=== MT5 Bridge Starting ==="
 echo "Login: ${MT5_LOGIN:-not set}"
