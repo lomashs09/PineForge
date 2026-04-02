@@ -27,10 +27,12 @@ echo "VNC: http://$(hostname -I | awk '{print $1}'):6080/vnc.html"
 MT5_EXE=$(find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1)
 if [ -n "$MT5_EXE" ]; then
     echo "Starting MT5: $MT5_EXE"
-    # Register MT5 path in Wine registry so the Python package can find it
+    # Register MT5 path in Wine registry
     wine reg add "HKCU\\Software\\MetaQuotes\\Terminal" /v InstallPath /t REG_SZ /d "C:\\Program Files\\MetaTrader 5" /f 2>/dev/null || true
+    # Start terminal in portable mode (no updates, uses local config)
     wine "$MT5_EXE" /portable &
-    sleep 10  # Give MT5 more time to start
+    echo "Waiting 30s for MT5 terminal to fully start..."
+    sleep 30
 else
     echo ""
     echo "======================================================"

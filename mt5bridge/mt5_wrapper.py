@@ -72,16 +72,20 @@ _DEFAULT_MT5_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
 def _do_initialize(path: str = "") -> bool:
     _start_rpyc_server()
     mt5 = _get_mt5()
-    # Always pass the path — Wine doesn't set up registry entries
-    # so mt5.initialize() can't find the terminal without it
     init_path = path or _DEFAULT_MT5_PATH
-    logger.info("Initializing MT5 with path: %s", init_path)
-    if not mt5.initialize(path=init_path):
+    # Retry initialization — terminal may need time to start its IPC pipe
+    for attempt in range(3):
+        logger.info("Initializing MT5 (attempt %d/3) path: %s", attempt + 1, init_path)
+        if mt5.initialize(path=init_path, timeout=120000):  # 120 second timeout
+            logger.info("MT5 initialized successfully")
+            return True
         err = mt5.last_error()
-        logger.error("MT5 initialize failed: %s", err)
-        return False
-    logger.info("MT5 initialized")
-    return True
+        logger.warning("MT5 initialize attempt %d failed: %s", attempt + 1, err)
+        if attempt < 2:
+            import time
+            time.sleep(15)  # Wait before retry
+    logger.error("MT5 initialize failed after 3 attempts")
+    return False
 
 
 def _do_login(login: int, password: str, server: str) -> bool:
