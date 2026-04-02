@@ -193,19 +193,27 @@ class LiveBridge:
                 try:
                     print("Deploying MT5 account...", flush=True)
                     await account.deploy()
+                    print("Waiting for deploy to complete...", flush=True)
+                    await account.wait_deployed(timeout_in_seconds=120)
                 except Exception as e:
                     print(f"Deploy note: {e}", flush=True)
                     print("Continuing — account may already be provisioned...", flush=True)
 
             print("Waiting for MT5 connection...", flush=True)
-            try:
-                await account.wait_connected(timeout_in_seconds=60)
-            except Exception as e:
-                print(f"Connection timeout: {e}", flush=True)
-                print("Retrying with account reload...", flush=True)
-                account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
-                print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
-                await account.wait_connected(timeout_in_seconds=120)
+            for attempt in range(3):
+                try:
+                    await account.wait_connected(timeout_in_seconds=120)
+                    break
+                except Exception as e:
+                    print(f"Connection attempt {attempt+1}/3 timeout: {e}", flush=True)
+                    if attempt < 2:
+                        print("Reloading account and retrying...", flush=True)
+                        account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+                        print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
+                        if account.state not in ("DEPLOYING", "DEPLOYED"):
+                            await account.deploy()
+                    else:
+                        raise
 
             connection = account.get_rpc_connection()
             await connection.connect()
