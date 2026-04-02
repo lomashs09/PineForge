@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .database import async_session, engine
-from .routers import accounts, admin, auth, bots, dashboard, scripts
+from .routers import accounts, admin, auth, bots, dashboard, payments, scripts
 from .services.bot_manager import BotManager
 from .services.script_service import seed_system_scripts
 
@@ -76,6 +76,7 @@ app.include_router(scripts.router)
 app.include_router(accounts.router)
 app.include_router(bots.router)
 app.include_router(dashboard.router)
+app.include_router(payments.router)
 app.include_router(admin.router)
 
 

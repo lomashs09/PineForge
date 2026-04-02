@@ -1,4 +1,4 @@
-"""Authentication routes — register, login, refresh, profile."""
+"""Authentication routes — register, login, refresh, profile, email verification."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError
@@ -13,9 +13,11 @@ from ..schemas.auth import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    ResendVerificationRequest,
     TokenResponse,
     UpdateProfileRequest,
     UserResponse,
+    VerifyEmailRequest,
 )
 from ..services.auth_service import (
     create_access_token,
@@ -24,6 +26,7 @@ from ..services.auth_service import (
     hash_password,
     verify_password,
 )
+from ..services.email_service import EmailRateLimited, generate_verification_token, send_verification_email
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -34,14 +37,22 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    token = generate_verification_token()
     user = User(
         email=body.email,
         hashed_password=hash_password(body.password),
         full_name=body.full_name,
+        email_verification_token=token,
     )
     db.add(user)
     await db.flush()
     await db.refresh(user)
+
+    try:
+        send_verification_email(body.email, body.full_name, token)
+    except EmailRateLimited:
+        pass  # User just registered — don't block registration over rate limit
+
     return user
 
 
@@ -55,6 +66,9 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+
+    if not user.is_email_verified:
+        raise HTTPException(status_code=403, detail="Email not verified. Please check your inbox.")
 
     settings = get_settings()
     token_data = {"sub": str(user.id), "email": user.email, "is_admin": user.is_admin}
@@ -116,3 +130,49 @@ async def update_me(
     await db.flush()
     await db.refresh(current_user)
     return current_user
+
+
+@router.post("/verify-email")
+async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(User).where(User.email_verification_token == body.token)
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+
+    if user.is_email_verified:
+        return {"message": "Email already verified"}
+
+    user.is_email_verified = True
+    user.email_verification_token = None
+    await db.flush()
+
+    return {"message": "Email verified successfully"}
+
+
+@router.post("/resend-verification")
+async def resend_verification(
+    body: ResendVerificationRequest, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    # Always return success to avoid leaking whether an email exists
+    if user is None or user.is_email_verified:
+        return {"message": "If that email is registered, a verification link has been sent."}
+
+    token = generate_verification_token()
+    user.email_verification_token = token
+    await db.flush()
+
+    try:
+        send_verification_email(user.email, user.full_name, token)
+    except EmailRateLimited as e:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Please wait {e.retry_after} seconds before requesting another email.",
+        )
+
+    return {"message": "If that email is registered, a verification link has been sent."}

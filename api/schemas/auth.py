@@ -34,7 +34,9 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     is_active: bool
+    is_email_verified: bool
     is_admin: bool
+    plan: str
     max_bots: int
     created_at: datetime
 
@@ -45,3 +47,11 @@ class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = None
     password: Optional[str] = None
     current_password: Optional[str] = None
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr

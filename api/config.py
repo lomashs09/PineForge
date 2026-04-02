@@ -27,6 +27,21 @@ class Settings(BaseSettings):
     # Auth
     AUTH_DISABLED: bool = False  # Set True to bypass JWT auth (dev only)
 
+    # Stripe
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_STARTER_MONTHLY: str = ""
+    STRIPE_PRICE_STARTER_ANNUAL: str = ""
+    STRIPE_PRICE_PRO_MONTHLY: str = ""
+    STRIPE_PRICE_PRO_ANNUAL: str = ""
+    STRIPE_PRICE_EXPERT_MONTHLY: str = ""
+    STRIPE_PRICE_EXPERT_ANNUAL: str = ""
+
+    # Email (Resend)
+    RESEND_API_KEY: str = ""
+    EMAIL_FROM: str = "PineForge <noreply@getpineforge.com>"
+    FRONTEND_URL: str = "http://localhost:5173"
+
     # App
     APP_ENV: str = "development"
     APP_HOST: str = "0.0.0.0"
