@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     STRIPE_PRICE_EXPERT_MONTHLY: str = ""
     STRIPE_PRICE_EXPERT_ANNUAL: str = ""
 
+    # Data providers
+    TWELVEDATA_API_KEY: str = ""  # Free tier: 800 credits/day, 1+ year intraday history
+
     # Email (Resend)
     RESEND_API_KEY: str = ""
     EMAIL_FROM: str = "PineForge <noreply@getpineforge.com>"

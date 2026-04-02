@@ -59,10 +59,22 @@ router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 @router.get("/backtest/config")
 async def get_backtest_config():
     """Return available symbols, intervals, and date range limits."""
+    from ..config import get_settings
+    settings = get_settings()
+    has_twelvedata = bool(settings.TWELVEDATA_API_KEY)
+
+    # With Twelve Data, intraday limits are much higher
+    intervals = []
+    for i in _INTERVALS:
+        if has_twelvedata and i["value"] in ("1m", "5m", "15m"):
+            intervals.append({**i, "max_days": 365})  # 1 year with Twelve Data
+        else:
+            intervals.append(i)
+
     today = datetime.now().strftime("%Y-%m-%d")
     return {
         "symbols": _SYMBOLS,
-        "intervals": _INTERVALS,
+        "intervals": intervals,
         "today": today,
     }
 
@@ -189,7 +201,12 @@ async def backtest_script(
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Enforce date range limits based on interval
+    # With Twelve Data, intraday limits are expanded to 365 days
+    from ..config import get_settings as _get_settings
+    _settings = _get_settings()
     max_days = _INTERVAL_MAX_DAYS.get(body.interval, 365)
+    if _settings.TWELVEDATA_API_KEY and body.interval in ("1m", "5m", "15m"):
+        max_days = 365
     earliest = (datetime.now() - timedelta(days=max_days)).strftime("%Y-%m-%d")
     start = body.start
     if start < earliest:

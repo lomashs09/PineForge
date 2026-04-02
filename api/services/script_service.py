@@ -109,10 +109,32 @@ async def run_backtest(
     loop = asyncio.get_event_loop()
 
     def _run():
-        from pineforge.data import download
         from pineforge.engine import Engine
+        from ..config import get_settings
 
-        data = download(symbol=symbol, start=start, end=end, interval=interval)
+        settings = get_settings()
+
+        # Use Twelve Data for intraday intervals when date range exceeds yfinance limits
+        # yfinance: 5m/15m = 60 days, 1m = 7 days
+        # Twelve Data: 1+ year for all intervals
+        use_twelvedata = False
+        if interval in ("1m", "5m", "15m") and settings.TWELVEDATA_API_KEY:
+            from datetime import datetime, timedelta
+            yf_limits = {"1m": 7, "5m": 60, "15m": 60}
+            max_days = yf_limits.get(interval, 60)
+            earliest_yf = (datetime.now() - timedelta(days=max_days)).strftime("%Y-%m-%d")
+            if start < earliest_yf:
+                use_twelvedata = True
+
+        if use_twelvedata:
+            from pineforge.data_twelvedata import download as td_download
+            logger.info("Using Twelve Data for %s %s (%s to %s)", symbol, interval, start, end)
+            data = td_download(symbol=symbol, start=start, end=end,
+                               interval=interval, api_key=settings.TWELVEDATA_API_KEY)
+        else:
+            from pineforge.data import download
+            data = download(symbol=symbol, start=start, end=end, interval=interval)
+
         engine = Engine(
             initial_capital=capital, fill_on="next_open",
             interval=interval, qty_override=quantity,
