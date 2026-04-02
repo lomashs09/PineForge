@@ -62,15 +62,17 @@ RUN mkdir -p /root/.wine/drive_c/Python && \
 RUN wine $WINEPY -m pip install "numpy<2" MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
     echo "=== Packages installed ==="
 
-# ── Try to install MT5 terminal (may succeed with vcrun2022 fix) ─────
-RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" \
-        -O /root/.wine/drive_c/mt5setup.exe && \
-    Xvfb :0 -screen 0 1280x720x24 & sleep 1 && \
-    timeout 120 wine /root/.wine/drive_c/mt5setup.exe /auto 2>/dev/null; \
-    sleep 5 && \
-    kill %1 2>/dev/null; \
-    MT5=$(find /root/.wine -name "terminal64.exe" 2>/dev/null | head -1) && \
-    if [ -n "$MT5" ]; then echo "MT5 INSTALLED: $MT5"; else echo "MT5 not auto-installed — use VNC"; fi || true
+# ── MT5 terminal (pre-built from Mac, bypasses installer debugger check) ─
+# The mt5setup.exe installer refuses to run under Wine (debugger detection).
+# Instead, we copy the terminal files from a real MT5 installation.
+# To regenerate: install MT5 on Mac/Windows, tar the folder, place here.
+COPY mt5-terminal.tar.gz /tmp/mt5-terminal.tar.gz
+RUN mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5" && \
+    cd "/root/.wine/drive_c/Program Files/MetaTrader 5" && \
+    tar xzf /tmp/mt5-terminal.tar.gz && \
+    rm /tmp/mt5-terminal.tar.gz && \
+    echo "=== MT5 terminal installed ===" && \
+    ls -la terminal64.exe
 
 # ── Linux Python (FastAPI bridge) ─────────────────────────────────────
 WORKDIR /app
