@@ -244,7 +244,13 @@ class BotManager:
         return bot_id in self._running_bots
 
     async def restart_crashed_bots(self) -> None:
-        """On startup, restart bots that were running before server shutdown."""
+        """On startup, restart bots that were running before server shutdown.
+
+        Retries up to 3 times with delays between bots to avoid overwhelming MetaAPI.
+        """
+        # Wait a bit for the server to fully start before reconnecting bots
+        await asyncio.sleep(5)
+
         try:
             async with self._session_factory() as db:
                 result = await db.execute(
@@ -255,19 +261,36 @@ class BotManager:
             logger.warning("Failed to query crashed bots: %s", e)
             return
 
+        if not bots:
+            return
+
+        logger.info("Found %d bots to restart", len(bots))
+
         for bot in bots:
-            try:
-                logger.info("Restarting bot %s (%s)", bot.id, bot.name)
-                await self.start_bot(bot.id)
-            except Exception as e:
-                logger.error("Failed to restart bot %s: %s", bot.id, e)
+            success = False
+            for attempt in range(3):
+                try:
+                    logger.info("Restarting bot %s (%s) — attempt %d/3", bot.id, bot.name, attempt + 1)
+                    await self.start_bot(bot.id)
+                    logger.info("Bot %s restarted successfully", bot.name)
+                    success = True
+                    break
+                except Exception as e:
+                    logger.error("Restart attempt %d failed for %s: %s", attempt + 1, bot.name, e)
+                    if attempt < 2:
+                        await asyncio.sleep(10)  # Wait before retry
+
+            if not success:
                 async with self._session_factory() as db:
                     result = await db.execute(select(Bot).where(Bot.id == bot.id))
                     b = result.scalar_one_or_none()
                     if b:
                         b.status = "error"
-                        b.error_message = f"Failed to restart: {e}"
+                        b.error_message = "Failed to auto-restart after deploy. Click Start to retry."
                         await db.commit()
+
+            # Delay between bots to avoid MetaAPI rate limits
+            await asyncio.sleep(5)
 
     async def shutdown_all(self) -> None:
         """Stop all running bots (called on app shutdown)."""
