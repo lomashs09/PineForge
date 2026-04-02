@@ -1,7 +1,7 @@
 # MT5 Bridge — Self-hosted MetaTrader 5 REST API
 #
-# Uses Wine 9+ (WineHQ) which implements the CRT functions needed by MT5/numpy.
-# Ubuntu 22.04 default Wine 6 is too old (missing fetestexcept etc).
+# Uses Wine 11 (WineHQ) + noVNC for browser-based MT5 access.
+# First run: open http://<host>:6080 to install MT5 via browser.
 
 FROM ubuntu:22.04
 
@@ -11,21 +11,21 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEARCH=win64 \
     DISPLAY=:0
 
-# ── WineHQ stable (Wine 9+) ──────────────────────────────────────────
+# ── WineHQ stable + noVNC ────────────────────────────────────────────
 RUN dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         software-properties-common wget gnupg2 \
         xvfb xauth unzip cabextract curl \
+        x11vnc novnc websockify \
         python3 python3-pip python3-venv && \
-    # Add WineHQ repo
+    # WineHQ repo
     mkdir -pm755 /etc/apt/keyrings && \
     wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key 2>/dev/null && \
     echo "deb [signed-by=/etc/apt/keyrings/winehq-archive.key] https://dl.winehq.org/wine-builds/ubuntu/ jammy main" > /etc/apt/sources.list.d/winehq.list && \
     apt-get update && \
     apt-get install -y --install-recommends winehq-stable && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    # Verify wine version
     wine --version
 
 # ── Wine init ─────────────────────────────────────────────────────────
@@ -43,15 +43,14 @@ RUN mkdir -p /root/.wine/drive_c/Python && \
     rm /tmp/get-pip.py && \
     echo "=== Wine Python 3.9 ready ==="
 
-# ── Install MetaTrader5 + RPyC in Wine Python ────────────────────────
+# ── MetaTrader5 + RPyC in Wine Python ────────────────────────────────
 RUN wine $WINEPY -m pip install MetaTrader5 "rpyc>=5,<6" 2>/dev/null; \
     echo "=== MT5 + RPyC installed ==="
 
-# ── MetaTrader 5 terminal ─────────────────────────────────────────────
-# The MT5 installer hangs under headless Wine. Instead, let the
-# MetaTrader5 Python package download the terminal on first initialize().
-# It will auto-install to the Wine prefix when mt5.initialize() is called.
-# If you want to pre-install, mount a volume with a working MT5 install.
+# ── Download MT5 installer (user runs it via VNC on first boot) ───────
+RUN wget -q "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" \
+    -O /root/.wine/drive_c/mt5setup.exe && \
+    echo "=== MT5 installer downloaded to C:\\mt5setup.exe ==="
 
 # ── Linux Python (FastAPI bridge) ─────────────────────────────────────
 WORKDIR /app
@@ -68,6 +67,6 @@ COPY . /app/mt5bridge/
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-EXPOSE 5555
+EXPOSE 5555 6080
 
 ENTRYPOINT ["/app/entrypoint.sh"]

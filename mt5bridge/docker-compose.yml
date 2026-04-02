@@ -21,6 +21,7 @@ services:
     restart: unless-stopped
     ports:
       - "5551:5555"
+      - "6080:6080"   # noVNC (browser-based desktop for MT5 install/monitoring)
     environment:
       MT5_LOGIN: "${MT5_ACCOUNT1_LOGIN}"
       MT5_PASSWORD: "${MT5_ACCOUNT1_PASSWORD}"
