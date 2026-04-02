@@ -67,13 +67,16 @@ async def _run(func, *args):
 
 # ── Connection ────────────────────────────────────────────────────────
 
+_DEFAULT_MT5_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+
 def _do_initialize(path: str = "") -> bool:
     _start_rpyc_server()
     mt5 = _get_mt5()
-    kwargs = {}
-    if path:
-        kwargs["path"] = path
-    if not mt5.initialize(**kwargs):
+    # Always pass the path — Wine doesn't set up registry entries
+    # so mt5.initialize() can't find the terminal without it
+    init_path = path or _DEFAULT_MT5_PATH
+    logger.info("Initializing MT5 with path: %s", init_path)
+    if not mt5.initialize(path=init_path):
         err = mt5.last_error()
         logger.error("MT5 initialize failed: %s", err)
         return False
