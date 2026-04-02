@@ -258,15 +258,35 @@ class LiveBridge:
         self._last_heartbeat = self._start_time
 
         self._connector = connector  # Store for _poll_cycle candle fetching
+        self._account = account  # Store for reconnection
+        self._connection = connection
+        self._executor = executor
+        self._consecutive_errors = 0
 
         while not self._shutdown:
             try:
-                await self._poll_cycle(account, executor, cfg)
+                await self._poll_cycle(self._account, self._executor, cfg)
+                self._consecutive_errors = 0  # Reset on success
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                logger.error("Error in poll cycle: %s", e, exc_info=True)
-                print(f"  [ERROR] {e}", flush=True)
+                self._consecutive_errors += 1
+                logger.error("Error in poll cycle (%d consecutive): %s",
+                             self._consecutive_errors, e, exc_info=True)
+                print(f"  [ERROR] ({self._consecutive_errors}x) {e}", flush=True)
+
+                # After 3 consecutive errors, try to reconnect
+                if self._consecutive_errors >= 3 and cfg.mt5_backend != "bridge":
+                    print("  Multiple failures — attempting reconnect...", flush=True)
+                    try:
+                        await self._reconnect_metaapi(cfg)
+                        self._consecutive_errors = 0
+                        print("  Reconnected successfully!", flush=True)
+                    except Exception as re:
+                        print(f"  Reconnect failed: {re}", flush=True)
+                        # Wait longer before next attempt
+                        await asyncio.sleep(30)
+                        continue
 
             self._poll_count += 1
             self._print_heartbeat_if_due()
@@ -275,9 +295,46 @@ class LiveBridge:
         print("\nShutting down...", flush=True)
         if connector:
             await connector.disconnect()
-        elif connection:
-            await connection.close()
+        elif self._connection:
+            try:
+                await self._connection.close()
+            except Exception:
+                pass
         print("Disconnected. Goodbye.", flush=True)
+
+    async def _reconnect_metaapi(self, cfg):
+        """Reconnect to MetaAPI when the account gets undeployed/disconnected."""
+        from metaapi_cloud_sdk import MetaApi
+
+        # Close old connection
+        if self._connection:
+            try:
+                await self._connection.close()
+            except Exception:
+                pass
+
+        print("  Reconnecting to MetaAPI...", flush=True)
+        api = MetaApi(token=cfg.metaapi_token)
+        account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
+        print(f"  Account state: {account.state}", flush=True)
+
+        # Redeploy if needed
+        if account.state not in ("DEPLOYING", "DEPLOYED"):
+            print("  Redeploying account...", flush=True)
+            await account.deploy()
+
+        await account.wait_connected(timeout_in_seconds=120)
+
+        connection = account.get_rpc_connection()
+        await connection.connect()
+        await connection.wait_synchronized(timeout_in_seconds=120)
+
+        # Update stored references
+        self._account = account
+        self._connection = connection
+        self._executor = Executor(connection, cfg.symbol, cfg.is_live)
+
+        print("  Reconnected to MT5 account.", flush=True)
 
     def _print_heartbeat_if_due(self):
         """Print a status line every hour so you can verify the server is alive."""
