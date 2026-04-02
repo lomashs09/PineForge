@@ -48,6 +48,21 @@ async def create_account(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Check account limit (non-admin: 1 account on free plan)
+    max_accounts = 99 if current_user.is_admin else 1
+    result = await db.execute(
+        select(func.count(BrokerAccount.id)).where(
+            BrokerAccount.user_id == current_user.id,
+            BrokerAccount.is_active == True,
+        )
+    )
+    account_count = result.scalar()
+    if account_count >= max_accounts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Account limit reached ({max_accounts}). Upgrade your plan for more broker accounts."
+        )
+
     settings = get_settings()
     if not settings.METAAPI_TOKEN:
         raise HTTPException(status_code=500, detail="MetaAPI token not configured")

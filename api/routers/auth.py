@@ -111,6 +111,37 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
+@router.get("/limits")
+async def get_limits(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the user's current usage vs limits."""
+    from sqlalchemy import func
+    from ..models.bot import Bot
+    from ..models.broker_account import BrokerAccount
+
+    bot_count = (await db.execute(
+        select(func.count(Bot.id)).where(Bot.user_id == current_user.id)
+    )).scalar() or 0
+
+    account_count = (await db.execute(
+        select(func.count(BrokerAccount.id)).where(
+            BrokerAccount.user_id == current_user.id,
+            BrokerAccount.is_active == True,
+        )
+    )).scalar() or 0
+
+    max_accounts = 99 if current_user.is_admin else 1
+
+    return {
+        "plan": current_user.plan or "free",
+        "is_admin": current_user.is_admin,
+        "bots": {"used": bot_count, "max": current_user.max_bots},
+        "accounts": {"used": account_count, "max": max_accounts},
+    }
+
+
 @router.patch("/me", response_model=UserResponse)
 async def update_me(
     body: UpdateProfileRequest,

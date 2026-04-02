@@ -31,7 +31,7 @@ class User(Base):
     plan: Mapped[str] = mapped_column(String(20), default="free", server_default=text("'free'"))
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True)
     stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    max_bots: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    max_bots: Mapped[int] = mapped_column(Integer, default=2, server_default=text("2"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
