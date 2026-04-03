@@ -15,6 +15,7 @@ from ..models.bot import Bot
 from ..models.broker_account import BrokerAccount
 from ..models.script import Script
 from ..utils.bot_logger import BotDatabaseHandler, BotPrintCapture
+from .connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class BotManager:
         self._bot_bridges: Dict[uuid.UUID, object] = {}  # LiveBridge instances
         self._bot_loggers: Dict[uuid.UUID, BotDatabaseHandler] = {}
         self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
+        self._conn_mgr = ConnectionManager(metaapi_token) if metaapi_token else None
 
     async def start_bot(self, bot_id: uuid.UUID) -> None:
         """Load bot config from DB and start it as an asyncio task."""
@@ -77,6 +79,12 @@ class BotManager:
 
             bridge = LiveBridge(config)
             bridge._register_signals = False  # Don't register OS signal handlers
+
+            # Pre-connect via ConnectionManager (reuses existing deployment)
+            if self._conn_mgr and self._mt5_backend == "metaapi":
+                managed = await self._conn_mgr.get_connection(account.metaapi_account_id)
+                bridge._preconnected_account = managed.account
+                bridge._preconnected_connection = managed.connection
 
             # Set up dedicated logger
             bot_logger = logging.getLogger(f"bot.{bot_id}")
@@ -158,7 +166,10 @@ class BotManager:
             sys.stdout = original_stdout
             await db_handler.stop()
             bot_logger.removeHandler(db_handler)
-            await self._undeploy_account(bot_id)
+            # Release connection (keeps it alive for other bots) instead of undeploying
+            metaapi_id = self._bot_account_ids.get(bot_id)
+            if metaapi_id and self._conn_mgr:
+                self._conn_mgr.release_connection(metaapi_id)
             self._running_bots.pop(bot_id, None)
             self._bot_bridges.pop(bot_id, None)
             self._bot_loggers.pop(bot_id, None)

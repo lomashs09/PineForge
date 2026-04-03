@@ -41,6 +41,8 @@ class LiveBridge:
         )
         self._shutdown = False
         self._register_signals = True  # Set to False when running inside BotManager
+        self._preconnected_account = None  # Set by BotManager when using ConnectionManager
+        self._preconnected_connection = None
         self._last_bar_time: str | None = None
         self._pending_signal: str | None = None
         self._interpreter: Interpreter | None = None
@@ -180,6 +182,14 @@ class LiveBridge:
             print("Connected to MT5 via self-hosted bridge.\n", flush=True)
 
             executor = ConnectorExecutor(connector, cfg.symbol, cfg.is_live)
+        elif self._preconnected_account and self._preconnected_connection:
+            # Reuse existing connection from ConnectionManager (no new deploy!)
+            print("Using pre-connected MetaAPI account (shared connection)...", flush=True)
+            account = self._preconnected_account
+            connection = self._preconnected_connection
+            print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
+            print("Connected to MT5 account (reused).\n", flush=True)
+
         else:
             from metaapi_cloud_sdk import MetaApi
 
