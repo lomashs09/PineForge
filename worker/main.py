@@ -70,9 +70,13 @@ class BotWorker:
         await self._restart_running_bots()
 
         # Poll loop
+        poll_count = 0
         while True:
             try:
                 await self._poll_commands()
+                poll_count += 1
+                if poll_count % 12 == 1:  # Log every ~60s
+                    logger.info("Polling... (running bots: %d)", len(self._running))
             except Exception as e:
                 logger.error("Poll error: %s", e, exc_info=True)
 
