@@ -256,7 +256,11 @@ async def main():
         "max_overflow": 10,
     }
     if "neon.tech" in config.database_url:
-        engine_kwargs["connect_args"] = {"ssl": True}
+        import ssl as _ssl
+        ssl_ctx = _ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = _ssl.CERT_NONE
+        engine_kwargs["connect_args"] = {"ssl": ssl_ctx}
 
     engine = create_async_engine(config.database_url, **engine_kwargs)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
