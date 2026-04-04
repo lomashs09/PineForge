@@ -87,7 +87,10 @@ class BotWorker:
                 .options(selectinload(Bot.broker_account), selectinload(Bot.script))
                 .where(Bot.status == "start_requested")
             )
-            for bot in result.scalars().all():
+            bots_to_start = result.scalars().all()
+            if bots_to_start:
+                logger.info("Found %d bots to start", len(bots_to_start))
+            for bot in bots_to_start:
                 if str(bot.id) not in self._running:
                     await self._start_bot(bot, db)
 
@@ -95,7 +98,8 @@ class BotWorker:
             result = await db.execute(
                 select(Bot).where(Bot.status == "stop_requested")
             )
-            for bot in result.scalars().all():
+            bots_to_stop = result.scalars().all()
+            for bot in bots_to_stop:
                 await self._stop_bot(bot, db)
 
             await db.commit()
