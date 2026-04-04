@@ -197,9 +197,15 @@ class BotDatabaseHandler(logging.Handler):
         try:
             while True:
                 await asyncio.sleep(self._flush_interval)
-                await self._flush_all()
+                try:
+                    await self._flush_all()
+                except Exception:
+                    pass  # Never let DB errors kill the consumer
         except asyncio.CancelledError:
-            await self._flush_all()
+            try:
+                await self._flush_all()
+            except Exception:
+                pass
 
     async def _flush_all(self):
         """Drain the queue and insert all pending entries."""

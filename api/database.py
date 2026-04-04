@@ -17,7 +17,15 @@ def asyncpg_connect_args(database_url: str) -> dict:
 
 settings = get_settings()
 
-_engine_kwargs = {"echo": settings.APP_ENV == "development"}
+_engine_kwargs = {
+    "echo": settings.APP_ENV == "development",
+    # Neon serverless drops idle connections after ~5 minutes.
+    # These settings prevent "connection is closed" errors:
+    "pool_recycle": 180,       # Recycle connections every 3 minutes
+    "pool_pre_ping": True,     # Test connection before using it
+    "pool_size": 5,            # Keep 5 connections in the pool
+    "max_overflow": 10,        # Allow 10 more under load
+}
 _ca = asyncpg_connect_args(settings.DATABASE_URL)
 if _ca:
     _engine_kwargs["connect_args"] = _ca
