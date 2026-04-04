@@ -1,5 +1,6 @@
 """Bot routes — CRUD + lifecycle management + logs + trades + stats."""
 
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -146,17 +147,29 @@ async def start_bot(
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    bot_manager = _get_bot_manager(request)
-    try:
-        await bot_manager.start_bot(bot_id)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
+    from ..config import get_settings as _get_settings
+    settings = _get_settings()
 
-    # Refresh from DB
+    if settings.MT5_BACKEND == "direct":
+        # DB-driven: set status to "start_requested", worker picks it up
+        if bot.status in ("running", "starting", "start_requested"):
+            raise HTTPException(status_code=400, detail=f"Bot is already {bot.status}")
+        bot.status = "start_requested"
+        bot.error_message = None
+        await db.flush()
+    else:
+        # In-process: start via BotManager (MetaAPI)
+        bot_manager = _get_bot_manager(request)
+        try:
+            await bot_manager.start_bot(bot_id)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
+
     await db.refresh(bot)
-    live_status = bot_manager.get_status(bot_id) or {}
+    bot_manager = _get_bot_manager(request)
+    live_status = bot_manager.get_status(bot_id) or {} if settings.MT5_BACKEND != "direct" else {}
 
     return BotStatusResponse(
         id=bot.id,
@@ -187,8 +200,22 @@ async def stop_bot(
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    bot_manager = _get_bot_manager(request)
-    await bot_manager.stop_bot(bot_id)
+    from ..config import get_settings as _get_settings
+    settings = _get_settings()
+
+    if settings.MT5_BACKEND == "direct":
+        # DB-driven: set status to "stop_requested", worker picks it up
+        if bot.status in ("running", "starting", "start_requested"):
+            bot.status = "stop_requested"
+            await db.flush()
+        elif bot.status in ("error", "stop_requested"):
+            bot.status = "stopped"
+            bot.error_message = None
+            bot.stopped_at = datetime.now(timezone.utc)
+            await db.flush()
+    else:
+        bot_manager = _get_bot_manager(request)
+        await bot_manager.stop_bot(bot_id)
 
     await db.refresh(bot)
     return BotStatusResponse(
