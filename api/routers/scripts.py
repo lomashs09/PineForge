@@ -32,18 +32,9 @@ _INTERVAL_MAX_DAYS = {
     "1m": 7,
 }
 
-_SYMBOLS = [
-    {"symbol": "XAUUSD", "name": "Gold", "category": "commodity"},
-    {"symbol": "XAGUSD", "name": "Silver", "category": "commodity"},
-    {"symbol": "EURUSD", "name": "EUR/USD", "category": "forex"},
-    {"symbol": "GBPUSD", "name": "GBP/USD", "category": "forex"},
-    {"symbol": "USDJPY", "name": "USD/JPY", "category": "forex"},
-    {"symbol": "BTCUSD", "name": "Bitcoin", "category": "crypto"},
-    {"symbol": "ETHUSD", "name": "Ethereum", "category": "crypto"},
-    {"symbol": "AAPL", "name": "Apple", "category": "stock"},
-    {"symbol": "SPY", "name": "S&P 500 ETF", "category": "stock"},
-    {"symbol": "OIL", "name": "Crude Oil", "category": "commodity"},
-]
+from ..symbols import get_symbols_for_api
+
+_SYMBOLS = get_symbols_for_api()
 
 _INTERVALS = [
     {"value": "1d", "label": "1 Day", "max_days": _INTERVAL_MAX_DAYS["1d"]},
