@@ -167,7 +167,22 @@ class LiveBridge:
         connection = None  # MetaAPI RPC connection
         connector = None  # Self-hosted bridge connector
 
-        if cfg.mt5_backend == "bridge":
+        if cfg.mt5_backend == "direct":
+            # Direct MT5 access — worker sets _direct_executor_cls
+            print("Using direct MT5 terminal connection...", flush=True)
+            executor_cls = getattr(self, '_direct_executor_cls', None)
+            if executor_cls is None:
+                raise RuntimeError("mt5_backend=direct but no _direct_executor_cls set. Run via worker.")
+            executor = executor_cls(cfg.symbol, cfg.is_live)
+
+            acct_info = await executor.get_account_info()
+            if acct_info:
+                balance = acct_info.get("balance", 0)
+                print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}", flush=True)
+                self.risk.reset_daily(balance)
+            print(flush=True)
+
+        elif cfg.mt5_backend == "bridge":
             from .connector import create_connector
             from .connector_executor import ConnectorExecutor
 
@@ -233,9 +248,12 @@ class LiveBridge:
 
         # ── Fetch warmup bars ─────────────────────────────────────────
         print(f"Fetching {cfg.lookback_bars} historical bars for warmup...", flush=True)
-        if connector:
+        if cfg.mt5_backend == "direct":
+            from worker import mt5_direct
+            bars = await mt5_direct.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        elif connector:
             raw = await connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
-            bars = raw  # Already list of dicts with open/high/low/close/volume/date
+            bars = raw
         else:
             bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if len(bars) < 10:
@@ -358,7 +376,10 @@ class LiveBridge:
         the default backtest fill mode (fill_on="next_open") and avoids
         same-bar stop-outs that kill profitability.
         """
-        if self._connector:
+        if cfg.mt5_backend == "direct":
+            from worker import mt5_direct
+            bars = await mt5_direct.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+        elif self._connector:
             bars = await self._connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         else:
             bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
