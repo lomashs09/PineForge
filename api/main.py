@@ -37,6 +37,10 @@ async def lifespan(app: FastAPI):
     )
     app.state.bot_manager = bot_manager
 
+    # Start keepalive pings for persistent MetaAPI connections
+    if bot_manager._conn_mgr:
+        bot_manager._conn_mgr.start_keepalive()
+
     # Run slow startup tasks (seeding, bot restart) in background
     import asyncio
     asyncio.create_task(_startup_tasks())
@@ -44,8 +48,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: stop all bots
+    # Shutdown: stop all bots, then clean up connections
     await bot_manager.shutdown_all()
+    if bot_manager._conn_mgr:
+        await bot_manager._conn_mgr.shutdown()
     await engine.dispose()
 
 
