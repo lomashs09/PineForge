@@ -127,14 +127,19 @@ class BotWorker:
             try:
                 mt5_password = decrypt_password(account.mt5_password_encrypted, self.jwt_secret)
             except Exception as e:
+                logger.error("Failed to decrypt password for %s: %s", account.mt5_login, e)
                 bot.status = "error"
                 bot.error_message = f"Failed to decrypt MT5 password: {e}"
                 return
 
         if not mt5_password:
+            logger.error("No MT5 password stored for account %s (encrypted=%s, jwt_secret=%s)",
+                         account.mt5_login, bool(account.mt5_password_encrypted), bool(self.jwt_secret))
             bot.status = "error"
             bot.error_message = "MT5 password not stored. Please reconnect your broker account."
             return
+
+        logger.info("Password decrypted OK for %s@%s", account.mt5_login, account.mt5_server)
 
         # Ensure MT5 terminal is running for this account
         try:
@@ -142,7 +147,9 @@ class BotWorker:
                 account.mt5_login, mt5_password, account.mt5_server
             )
             terminal_path = str(instance.terminal_path)
+            logger.info("MT5 terminal ready at %s", terminal_path)
         except Exception as e:
+            logger.error("Failed to start MT5 for %s@%s: %s", account.mt5_login, account.mt5_server, e, exc_info=True)
             bot.status = "error"
             bot.error_message = f"Failed to start MT5 for {account.mt5_login}@{account.mt5_server}: {e}"
             return
