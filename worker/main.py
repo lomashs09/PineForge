@@ -12,6 +12,7 @@ Run: python -m worker.main
 import asyncio
 import io
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,7 @@ load_dotenv()
 
 from worker.config import WorkerConfig
 from worker.executor import DirectExecutor
-from worker import mt5_direct as mt5
+from worker.account_manager import AccountManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,25 +47,24 @@ from api.models.script import Script
 
 
 class BotWorker:
-    """Manages bot lifecycle on a Windows machine with direct MT5 access."""
+    """Manages bot lifecycle on a Windows machine with direct MT5 access.
 
-    def __init__(self, config: WorkerConfig, session_factory: async_sessionmaker):
+    Supports multiple broker accounts — each gets its own MT5 terminal instance.
+    """
+
+    def __init__(self, config: WorkerConfig, session_factory: async_sessionmaker,
+                 jwt_secret: str = ""):
         self.config = config
         self.session_factory = session_factory
-        self._running: Dict[str, asyncio.Task] = {}  # bot_id str → task
-        self._accounts_logged_in: set = set()  # MT5 login numbers already authenticated
+        self.jwt_secret = jwt_secret
+        self._running: Dict[str, asyncio.Task] = {}
+        self._account_mgr = AccountManager()
 
     async def run(self):
         """Main loop: poll DB for bot commands."""
         logger.info("Worker %s starting (poll=%ds, max_bots=%d)",
                      self.config.worker_id, self.config.poll_interval, self.config.max_bots)
-
-        # Initialize MT5 terminal
-        if not await mt5.initialize():
-            logger.error("Failed to initialize MT5 terminal. Is it running?")
-            return
-
-        logger.info("MT5 terminal connected")
+        logger.info("Multi-account mode — each broker account gets its own MT5 terminal")
 
         # Restart bots that were running before worker restart
         await self._restart_running_bots()
@@ -120,17 +120,32 @@ class BotWorker:
         account = bot.broker_account
         script = bot.script
 
-        # Login to MT5 account if not already
-        login_key = f"{account.mt5_login}@{account.mt5_server}"
-        if login_key not in self._accounts_logged_in:
-            # We need the MT5 password — but we don't store it.
-            # The terminal should already be logged in via the GUI.
-            # Just verify the connection is good.
-            if not await mt5.is_connected():
+        # Decrypt MT5 password
+        mt5_password = ""
+        if account.mt5_password_encrypted and self.jwt_secret:
+            from api.utils.crypto import decrypt_password
+            try:
+                mt5_password = decrypt_password(account.mt5_password_encrypted, self.jwt_secret)
+            except Exception as e:
                 bot.status = "error"
-                bot.error_message = "MT5 terminal not connected. Please login via MT5 GUI."
+                bot.error_message = f"Failed to decrypt MT5 password: {e}"
                 return
-            self._accounts_logged_in.add(login_key)
+
+        if not mt5_password:
+            bot.status = "error"
+            bot.error_message = "MT5 password not stored. Please reconnect your broker account."
+            return
+
+        # Ensure MT5 terminal is running for this account
+        try:
+            instance = await self._account_mgr.ensure_account_ready(
+                account.mt5_login, mt5_password, account.mt5_server
+            )
+            terminal_path = str(instance.terminal_path)
+        except Exception as e:
+            bot.status = "error"
+            bot.error_message = f"Failed to start MT5 for {account.mt5_login}@{account.mt5_server}: {e}"
+            return
 
         # Update status
         bot.status = "running"
@@ -142,7 +157,7 @@ class BotWorker:
             self._run_bot(str(bot.id), bot.name, script.source,
                           bot.symbol, bot.timeframe, float(bot.lot_size),
                           bot.is_live, bot.poll_interval_seconds,
-                          bot.lookback_bars, str(account.id))
+                          bot.lookback_bars, str(account.id), terminal_path)
         )
         self._running[str(bot.id)] = task
 
@@ -167,13 +182,13 @@ class BotWorker:
     async def _run_bot(self, bot_id: str, name: str, script_source: str,
                        symbol: str, timeframe: str, lot_size: float,
                        is_live: bool, poll_seconds: int, lookback: int,
-                       broker_account_id: str):
+                       broker_account_id: str, terminal_path: str = ""):
         """Run a single bot using LiveBridge with direct MT5 executor."""
         from pineforge.live.bridge import LiveBridge
         from pineforge.live.config import LiveConfig
 
-        logger.info("Bot %s running: %s %s %s", name, symbol, timeframe,
-                     "LIVE" if is_live else "DRY")
+        logger.info("Bot %s running: %s %s %s (terminal: %s)", name, symbol, timeframe,
+                     "LIVE" if is_live else "DRY", terminal_path)
 
         config = LiveConfig(
             symbol=symbol,
@@ -183,14 +198,15 @@ class BotWorker:
             poll_interval_seconds=poll_seconds,
             lookback_bars=lookback,
             script_source=script_source,
-            mt5_backend="direct",  # New backend type for direct MT5
+            mt5_backend="direct",
         )
 
         bridge = LiveBridge(config)
         bridge._register_signals = False
 
-        # Override the executor creation — use DirectExecutor
-        bridge._direct_executor_cls = DirectExecutor
+        # Create executor bound to the specific MT5 terminal for this account
+        bridge._direct_executor_cls = lambda sym, live: DirectExecutor(sym, live, terminal_path)
+        bridge._terminal_path = terminal_path
 
         try:
             await bridge.run()
@@ -277,7 +293,8 @@ async def main():
         logger.error("DB connection FAILED: %s", e)
         return
 
-    worker = BotWorker(config, session_factory)
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "")
+    worker = BotWorker(config, session_factory, jwt_secret=jwt_secret)
 
     try:
         await worker.run()

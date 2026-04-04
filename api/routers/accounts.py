@@ -64,27 +64,40 @@ async def create_account(
         )
 
     settings = get_settings()
-    if not settings.METAAPI_TOKEN:
-        raise HTTPException(status_code=500, detail="MetaAPI token not configured")
+    from ..utils.crypto import encrypt_password
 
-    try:
-        metaapi_account_id = await provision_account(
-            metaapi_token=settings.METAAPI_TOKEN,
-            mt5_login=body.mt5_login,
-            mt5_password=body.mt5_password,
-            mt5_server=body.mt5_server,
-            label=body.label,
-        )
-    except ProvisioningError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    metaapi_account_id = ""
+
+    if settings.MT5_BACKEND == "direct":
+        # Direct mode: no MetaAPI provisioning needed
+        # Just store credentials — worker will use them to login MT5
+        metaapi_account_id = f"direct-{body.mt5_login}"
+    else:
+        # MetaAPI mode: provision via cloud
+        if not settings.METAAPI_TOKEN:
+            raise HTTPException(status_code=500, detail="MetaAPI token not configured")
+        try:
+            metaapi_account_id = await provision_account(
+                metaapi_token=settings.METAAPI_TOKEN,
+                mt5_login=body.mt5_login,
+                mt5_password=body.mt5_password,
+                mt5_server=body.mt5_server,
+                label=body.label,
+            )
+        except ProvisioningError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+    # Encrypt and store MT5 password (needed for direct mode worker login)
+    encrypted_pw = encrypt_password(body.mt5_password, settings.JWT_SECRET_KEY)
 
     account = BrokerAccount(
         user_id=current_user.id,
         label=body.label,
         metaapi_account_id=metaapi_account_id,
         mt5_login=body.mt5_login,
+        mt5_password_encrypted=encrypted_pw,
         mt5_server=body.mt5_server,
     )
     db.add(account)

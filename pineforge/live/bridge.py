@@ -249,8 +249,8 @@ class LiveBridge:
         # ── Fetch warmup bars ─────────────────────────────────────────
         print(f"Fetching {cfg.lookback_bars} historical bars for warmup...", flush=True)
         if cfg.mt5_backend == "direct":
-            from worker import mt5_direct
-            bars = await mt5_direct.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+            # Fetch candles via the executor's MT5 connection
+            bars = await self._fetch_direct_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         elif connector:
             raw = await connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
             bars = raw
@@ -354,6 +354,38 @@ class LiveBridge:
 
         print("  Reconnected to MT5 account.", flush=True)
 
+    async def _fetch_direct_candles(self, symbol, timeframe, count):
+        """Fetch candles using the direct MT5 terminal connection."""
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        from datetime import datetime as dt, timezone as tz
+
+        terminal_path = getattr(self, '_terminal_path', '')
+
+        def _get():
+            import MetaTrader5 as _mt5
+            if terminal_path:
+                _mt5.initialize(path=terminal_path)
+            tf_map = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
+            tf = tf_map.get(timeframe)
+            if tf is None:
+                return []
+            sym_info = _mt5.symbol_info(symbol)
+            if sym_info and not sym_info.visible:
+                _mt5.symbol_select(symbol, True)
+            rates = _mt5.copy_rates_from_pos(symbol, tf, 0, count)
+            if rates is None or len(rates) == 0:
+                return []
+            return [
+                {"open": float(r[1]), "high": float(r[2]), "low": float(r[3]),
+                 "close": float(r[4]), "volume": int(r[5]),
+                 "date": dt.fromtimestamp(r[0], tz=tz.utc).isoformat()}
+                for r in rates
+            ]
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _get)
+
     def _print_heartbeat_if_due(self):
         """Print a status line every hour so you can verify the server is alive."""
         now = datetime.now(timezone.utc)
@@ -377,8 +409,7 @@ class LiveBridge:
         same-bar stop-outs that kill profitability.
         """
         if cfg.mt5_backend == "direct":
-            from worker import mt5_direct
-            bars = await mt5_direct.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+            bars = await self._fetch_direct_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         elif self._connector:
             bars = await self._connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         else:
