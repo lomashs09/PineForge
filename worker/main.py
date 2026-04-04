@@ -261,6 +261,18 @@ async def main():
     engine = create_async_engine(config.database_url, **engine_kwargs)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+    # Test DB connection
+    try:
+        async with session_factory() as db:
+            result = await db.execute(select(Bot))
+            all_bots = result.scalars().all()
+            logger.info("DB connection OK — found %d bots total", len(all_bots))
+            for b in all_bots:
+                logger.info("  Bot: %s status=%s", b.name, b.status)
+    except Exception as e:
+        logger.error("DB connection FAILED: %s", e)
+        return
+
     worker = BotWorker(config, session_factory)
 
     try:
