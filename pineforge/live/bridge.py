@@ -16,8 +16,8 @@ from ..interpreter import Interpreter
 from ..series import Series
 from ..broker import Broker
 from ..builtins import math_funcs, ta as ta_module, input_funcs, strategy as strategy_module
-from ..builtins.strategy import get_strategy_context
-from ..builtins.ta import get_ta_state, register_ohlcv
+from ..builtins.ta import register_ohlcv
+from ..execution_context import ExecutionContext
 
 from .config import LiveConfig
 from .feed import fetch_candles, detect_new_bar, get_latest_closed_bar_time
@@ -62,6 +62,7 @@ class LiveBridge:
         self._bar_index_s = Series()
         self._bar_count = 0
         self._connector = None  # Set when using bridge backend
+        self._ectx: ExecutionContext | None = None
 
     def _init_interpreter(self):
         """Parse the script and set up the interpreter."""
@@ -72,17 +73,18 @@ class LiveBridge:
         tokens = Lexer(source).tokenize()
         self._script_ast = Parser(tokens).parse()
 
+        # Each live session gets its own ExecutionContext
+        self._ectx = ExecutionContext()
+
         interp = Interpreter()
         self._broker = Broker(initial_capital=10000.0, fill_on="close")
 
         math_funcs.register(interp)
-        ta_module.register(interp)
-        input_funcs.register(interp)
-        strategy_module.register(interp)
+        ta_module.register(interp, ctx=self._ectx)
+        input_funcs.register(interp, ctx=self._ectx)
+        strategy_module.register(interp, ctx=self._ectx)
 
-        ctx = get_strategy_context()
-        ctx.set_broker(self._broker)
-        get_ta_state().reset()
+        self._ectx.strategy.set_broker(self._broker)
 
         interp.env.define("open", self._open_s)
         interp.env.define("high", self._high_s)
@@ -94,7 +96,7 @@ class LiveBridge:
         interp.env.define("ohlc4", self._ohlc4_s)
         interp.env.define("bar_index", self._bar_index_s)
 
-        register_ohlcv(interp, self._high_s, self._low_s, self._close_s)
+        register_ohlcv(interp, self._high_s, self._low_s, self._close_s, ctx=self._ectx)
 
         interp.load_script(self._script_ast)
         self._interpreter = interp
@@ -114,8 +116,7 @@ class LiveBridge:
         self._ohlc4_s.push((o + h + l + c) / 4)
         self._bar_index_s.push(self._bar_count)
 
-        ctx = get_strategy_context()
-        ctx.bar_index = self._bar_count
+        self._ectx.strategy.bar_index = self._bar_count
 
         self._broker.pending_orders.clear()
         self._interpreter.execute_bar(self._bar_count)

@@ -42,16 +42,19 @@ class LiveConfig:
 
     def validate(self) -> list[str]:
         errors = []
-        if not self.metaapi_token:
-            errors.append("METAAPI_TOKEN is not set")
-        if not self.metaapi_account_id:
-            errors.append("METAAPI_ACCOUNT_ID is not set")
+        if self.mt5_backend == "metaapi":
+            if not self.metaapi_token:
+                errors.append("METAAPI_TOKEN is not set")
+            if not self.metaapi_account_id:
+                errors.append("METAAPI_ACCOUNT_ID is not set")
         if not self.script_path and not self.script_source:
             errors.append("--script is required")
         if self.lot_size <= 0:
             errors.append("Lot size must be positive")
         if self.lot_size > self.max_lot_size:
             errors.append(f"Lot size {self.lot_size} exceeds max {self.max_lot_size}")
+        if self.poll_interval_seconds < 10:
+            errors.append("Poll interval must be at least 10 seconds")
         return errors
 
 

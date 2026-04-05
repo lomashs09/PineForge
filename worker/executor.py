@@ -12,7 +12,7 @@ from typing import Any
 
 logger = logging.getLogger("worker.executor")
 
-_executor_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mt5exec")
+_executor_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="mt5exec")
 
 
 class DirectExecutor:
