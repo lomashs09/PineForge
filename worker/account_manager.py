@@ -54,7 +54,26 @@ class MT5Instance:
         self.dir.mkdir(parents=True, exist_ok=True)
         shutil.copytree(MT5_TEMPLATE_DIR, self.dir, dirs_exist_ok=True)
         logger.info("MT5 copied to %s", self.dir)
+
+        # Write startup config so terminal auto-connects without "Open an Account" dialog
+        self._write_startup_config()
         return True
+
+    def _write_startup_config(self):
+        """Write an .ini file so the terminal auto-connects on first launch."""
+        # MT5 reads start.ini from its directory on startup in /portable mode
+        ini_path = self.dir / "start.ini"
+        ini_content = (
+            f"[Common]\n"
+            f"Login={self.login}\n"
+            f"Password={self.password}\n"
+            f"Server={self.server}\n"
+            f"KeepPrivate=1\n"
+            f"NewsEnable=0\n"
+            f"CommunityLogin=\n"
+        )
+        ini_path.write_text(ini_content, encoding="utf-8")
+        logger.info("Wrote start.ini for %s@%s", self.login, self.server)
 
     def _start_terminal(self):
         """Start the MT5 terminal process."""
@@ -62,12 +81,8 @@ class MT5Instance:
             return  # Already running
 
         logger.info("Starting MT5 terminal for %s@%s", self.login, self.server)
-        # Pass /login and /server to auto-login and skip "Open an Account" dialog
-        cmd = [str(self.terminal_path), "/portable",
-               f"/login={self.login}", f"/password={self.password}",
-               f"/server={self.server}"]
         self.process = subprocess.Popen(
-            cmd,
+            [str(self.terminal_path), "/portable", "/config:start.ini"],
             cwd=str(self.dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
