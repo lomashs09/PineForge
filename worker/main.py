@@ -76,6 +76,9 @@ class BotWorker:
         if self.config.use_subprocess:
             logger.info("Subprocess isolation ENABLED — each bot runs in its own process")
 
+        # Pre-provision all active broker accounts so bot starts are instant
+        await self._provision_all_accounts()
+
         # Restart bots that were running before worker restart
         await self._restart_running_bots()
 
@@ -439,6 +442,49 @@ class BotWorker:
 
         await self._account_mgr.shutdown_all()
         logger.info("Shutdown complete")
+
+    async def _provision_all_accounts(self):
+        """Pre-provision MT5 terminals for all active broker accounts on startup.
+
+        This is what MetaAPI does — accounts are deployed when connected, not when
+        a bot starts. Bot start then just connects to the already-running terminal.
+        """
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(BrokerAccount).where(BrokerAccount.is_active == True)
+            )
+            accounts = result.scalars().all()
+
+        if not accounts:
+            return
+
+        logger.info("Pre-provisioning %d broker accounts...", len(accounts))
+        for account in accounts:
+            mt5_password = ""
+            if account.mt5_password_encrypted and self.jwt_secret:
+                from api.utils.crypto import decrypt_password
+                try:
+                    mt5_password = decrypt_password(account.mt5_password_encrypted, self.jwt_secret)
+                except Exception as e:
+                    logger.warning("Failed to decrypt password for %s: %s", account.mt5_login, e)
+                    continue
+
+            if not mt5_password:
+                logger.warning("No password for account %s — skipping pre-provision", account.mt5_login)
+                continue
+
+            try:
+                instance = await self._account_mgr.ensure_account_ready(
+                    account.mt5_login, mt5_password, account.mt5_server
+                )
+                logger.info("Account %s@%s ready (terminal: %s)",
+                            account.mt5_login, account.mt5_server, instance.terminal_path)
+            except Exception as e:
+                logger.warning("Failed to pre-provision %s@%s: %s",
+                               account.mt5_login, account.mt5_server, e)
+
+        logger.info("Pre-provisioning complete — %d accounts ready",
+                     len(self._account_mgr._instances))
 
     async def _restart_running_bots(self):
         """On startup, restart bots that were running before."""
