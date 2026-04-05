@@ -121,15 +121,90 @@ def strategy_order(id: Any, direction: Any, qty: Any = None, **_kwargs) -> None:
     _ctx.broker.submit_entry(str(id), str(direction), q, _ctx.bar_index)
 
 
-def register(interpreter) -> None:
-    funcs = {
-        "strategy": strategy_declare,
-        "strategy.entry": strategy_entry,
-        "strategy.close": strategy_close,
-        "strategy.close_all": strategy_close_all,
-        "strategy.exit": strategy_exit,
-        "strategy.order": strategy_order,
-    }
+def register(interpreter, ctx=None) -> None:
+    if ctx is not None:
+        # Create closure-wrapped functions that use the provided context
+        sc = ctx.strategy
+
+        def _declare(title: Any = "Strategy", **kwargs) -> None:
+            sc.title = str(title)
+            sc.overlay = kwargs.get("overlay", True)
+            if "initial_capital" in kwargs:
+                sc.initial_capital = float(kwargs["initial_capital"])
+            if "default_qty_type" in kwargs:
+                sc.default_qty_type = str(kwargs["default_qty_type"])
+            if "default_qty_value" in kwargs:
+                sc.default_qty_value = float(kwargs["default_qty_value"])
+            if "commission_type" in kwargs:
+                sc.commission_type = str(kwargs["commission_type"])
+            if "commission_value" in kwargs:
+                sc.commission_value = float(kwargs["commission_value"])
+            if "slippage" in kwargs:
+                sc.slippage = int(kwargs["slippage"])
+
+        def _entry(id: Any, direction: Any, qty: Any = None, **_kwargs) -> None:
+            if sc.broker is None:
+                return
+            from ..series import Series, is_na
+            if isinstance(qty, Series):
+                qty = qty.current
+            if sc.qty_override is not None:
+                q = sc.qty_override
+            else:
+                q = float(qty) if qty is not None and not is_na(qty) else sc.default_qty_value
+            sc.broker.submit_entry(str(id), str(direction), q, sc.bar_index)
+
+        def _close(id: Any, **_kwargs) -> None:
+            if sc.broker is None:
+                return
+            sc.broker.submit_close(str(id), sc.bar_index)
+
+        def _close_all(**_kwargs) -> None:
+            if sc.broker is None:
+                return
+            sc.broker.submit_close_all(sc.bar_index)
+
+        def _exit(id: Any, from_entry: Any = None, **kwargs) -> None:
+            if sc.broker is None:
+                return
+            from ..series import is_na
+            _unwrap_val = lambda v: v if not is_na(v) else None
+            sc.broker.submit_exit(
+                str(id),
+                from_entry=str(from_entry) if from_entry else None,
+                stop=_unwrap_val(kwargs.get("stop")),
+                limit=_unwrap_val(kwargs.get("limit")),
+                bar_index=sc.bar_index,
+            )
+
+        def _order(id: Any, direction: Any, qty: Any = None, **_kwargs) -> None:
+            if sc.broker is None:
+                return
+            from ..series import is_na
+            if sc.qty_override is not None:
+                q = sc.qty_override
+            else:
+                q = float(qty) if qty is not None and not is_na(qty) else sc.default_qty_value
+            sc.broker.submit_entry(str(id), str(direction), q, sc.bar_index)
+
+        funcs = {
+            "strategy": _declare,
+            "strategy.entry": _entry,
+            "strategy.close": _close,
+            "strategy.close_all": _close_all,
+            "strategy.exit": _exit,
+            "strategy.order": _order,
+        }
+    else:
+        # Legacy path: use module-level _ctx global
+        funcs = {
+            "strategy": strategy_declare,
+            "strategy.entry": strategy_entry,
+            "strategy.close": strategy_close,
+            "strategy.close_all": strategy_close_all,
+            "strategy.exit": strategy_exit,
+            "strategy.order": strategy_order,
+        }
     for name, fn in funcs.items():
         interpreter.register_builtin(name, fn)
 

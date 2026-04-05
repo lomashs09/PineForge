@@ -24,6 +24,8 @@ class Interpreter:
     and series objects.
     """
 
+    MAX_LOOP_ITERATIONS = 100_000
+
     def __init__(self):
         self.env = Environment()
         self.builtins: dict[str, Callable] = {}
@@ -148,7 +150,11 @@ class Interpreter:
 
         result = na_value()
         i = start
+        count = 0
         while (step > 0 and i <= end) or (step < 0 and i >= end):
+            count += 1
+            if count > self.MAX_LOOP_ITERATIONS:
+                raise RuntimeError_(f"For loop exceeded {self.MAX_LOOP_ITERATIONS} iterations", node)
             self.env.define(node.var_name, i)
             result = self._exec_block(node.body)
             i += step
@@ -165,14 +171,15 @@ class Interpreter:
 
     def _exec_WhileStatement(self, node: ast.WhileStatement) -> Any:
         result = na_value()
-        limit = 10000
         count = 0
-        while count < limit:
+        while True:
+            count += 1
+            if count > self.MAX_LOOP_ITERATIONS:
+                raise RuntimeError_(f"While loop exceeded {self.MAX_LOOP_ITERATIONS} iterations", node)
             cond = self._unwrap(self._eval(node.condition))
             if not cond or is_na(cond):
                 break
             result = self._exec_block(node.body)
-            count += 1
         return result
 
     def _exec_FunctionDef(self, node: ast.FunctionDef) -> None:

@@ -17,6 +17,9 @@ _NA = float("nan")
 # Using id() is fragile because CPython reuses memory addresses.
 _series_counter: int = 0
 
+# Maximum data points kept per Series. When exceeded, oldest 10% is trimmed.
+MAX_SERIES_DATA = 50_000
+
 
 def na_value() -> float:
     return _NA
@@ -35,10 +38,13 @@ class Series:
 
     __slots__ = ("_data", "_id")
 
-    def __init__(self, initial: Any = None):
-        global _series_counter
-        _series_counter += 1
-        self._id: int = _series_counter
+    def __init__(self, initial: Any = None, ctx: Any = None):
+        if ctx is not None:
+            self._id: int = ctx.next_series_id()
+        else:
+            global _series_counter
+            _series_counter += 1
+            self._id: int = _series_counter
         self._data: list[Any] = []
         if initial is not None:
             self._data.append(initial)
@@ -46,6 +52,10 @@ class Series:
     def push(self, value: Any) -> None:
         """Append a new bar's value."""
         self._data.append(value)
+        if len(self._data) > MAX_SERIES_DATA:
+            # Trim oldest 10% to avoid repeated trimming
+            trim = MAX_SERIES_DATA // 10
+            self._data = self._data[trim:]
 
     def set_current(self, value: Any) -> None:
         """Set the current (latest) bar's value."""

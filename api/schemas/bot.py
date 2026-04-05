@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 
 class BotCreate(BaseModel):
@@ -22,6 +22,14 @@ class BotCreate(BaseModel):
     poll_interval_seconds: int = 60
     lookback_bars: int = 200
 
+    @validator("poll_interval_seconds")
+    def poll_interval_range(cls, v):
+        if v < 10:
+            raise ValueError("Poll interval must be at least 10 seconds")
+        if v > 3600:
+            raise ValueError("Poll interval must be at most 3600 seconds")
+        return v
+
 
 class BotUpdate(BaseModel):
     name: Optional[str] = None
@@ -35,6 +43,15 @@ class BotUpdate(BaseModel):
     cooldown_seconds: Optional[int] = None
     poll_interval_seconds: Optional[int] = None
     lookback_bars: Optional[int] = None
+
+    @validator("poll_interval_seconds")
+    def poll_interval_range(cls, v):
+        if v is not None:
+            if v < 10:
+                raise ValueError("Poll interval must be at least 10 seconds")
+            if v > 3600:
+                raise ValueError("Poll interval must be at most 3600 seconds")
+        return v
 
 
 class BotResponse(BaseModel):

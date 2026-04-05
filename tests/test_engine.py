@@ -124,6 +124,107 @@ if bar_index == 0
         assert result.total_trades >= 1
 
 
+RSI_SCRIPT = """//@version=5
+strategy("RSI Strategy", overlay=true)
+
+rsi_len = input.int(14, "RSI Length")
+rsi_val = ta.rsi(close, rsi_len)
+
+if ta.crossover(rsi_val, 30)
+    strategy.entry("Long", strategy.long)
+
+if ta.crossunder(rsi_val, 70)
+    strategy.close("Long")
+"""
+
+
+class TestParallelBacktests:
+    """Verify that concurrent Engine.run() calls produce correct independent results."""
+
+    def test_two_backtests_concurrent(self):
+        """Run two different strategies on different data in parallel threads."""
+        import concurrent.futures
+
+        data1 = _make_oscillating_data(200)
+        data2 = _make_oscillating_data(300, amplitude=15.0)
+
+        def run_sma():
+            engine = Engine(initial_capital=10000.0)
+            return engine.run(SMA_CROSS_SCRIPT, data1)
+
+        def run_rsi():
+            engine = Engine(initial_capital=5000.0)
+            return engine.run(RSI_SCRIPT, data2)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(run_sma)
+            f2 = pool.submit(run_rsi)
+            r1 = f1.result()
+            r2 = f2.result()
+
+        # Each should have correct strategy name
+        assert r1.strategy_name == "SMA Crossover"
+        assert r2.strategy_name == "RSI Strategy"
+
+        # Each should use correct initial capital
+        assert r1.initial_capital == 10000.0
+        assert r2.initial_capital == 5000.0
+
+        # Both should have produced trades
+        assert r1.total_trades > 0
+
+        # Equity curves should match data length
+        assert len(r1.equity_curve) == 200
+        assert len(r2.equity_curve) == 300
+
+    def test_same_strategy_different_params(self):
+        """Same script, different input overrides, run concurrently."""
+        import concurrent.futures
+
+        data = _make_oscillating_data(300)
+
+        def run_fast():
+            engine = Engine(initial_capital=10000.0)
+            return engine.run(SMA_CROSS_SCRIPT, data, input_overrides={"Fast Length": 5, "Slow Length": 15})
+
+        def run_slow():
+            engine = Engine(initial_capital=10000.0)
+            return engine.run(SMA_CROSS_SCRIPT, data, input_overrides={"Fast Length": 20, "Slow Length": 50})
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(run_fast)
+            f2 = pool.submit(run_slow)
+            r1 = f1.result()
+            r2 = f2.result()
+
+        # Both use same strategy name
+        assert r1.strategy_name == "SMA Crossover"
+        assert r2.strategy_name == "SMA Crossover"
+
+        # Different parameters should generally produce different trade counts
+        # (not guaranteed but very likely with 5/15 vs 20/50 on oscillating data)
+        assert r1.total_trades > 0
+        assert r2.total_trades > 0
+
+    def test_many_parallel_runs(self):
+        """Stress test: 8 concurrent backtests."""
+        import concurrent.futures
+
+        def run_one(i):
+            data = _make_oscillating_data(100 + i * 10)
+            engine = Engine(initial_capital=10000.0 + i * 1000)
+            return engine.run(SMA_CROSS_SCRIPT, data)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(run_one, i) for i in range(8)]
+            results = [f.result() for f in futures]
+
+        for i, r in enumerate(results):
+            assert r.strategy_name == "SMA Crossover"
+            assert r.initial_capital == 10000.0 + i * 1000
+            assert len(r.equity_curve) == 100 + i * 10
+
+
 class TestBroker:
     def test_position_tracking(self):
         from pineforge.broker import Broker

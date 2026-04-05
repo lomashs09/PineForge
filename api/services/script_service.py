@@ -12,10 +12,14 @@ from ..models.script import Script
 
 logger = logging.getLogger(__name__)
 
-# Lock to serialize engine.run() calls (it uses module-level singletons)
-_backtest_lock = asyncio.Lock()
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent.parent / "examples"
+
+
+_MAX_SCRIPT_SIZE = 100 * 1024  # 100KB
+_DANGEROUS_PATTERNS = re.compile(
+    r'\b(import|exec|eval|compile|__import__|__builtins__|__class__|__subclasses__)\b'
+)
 
 
 def validate_script(source: str) -> tuple:
@@ -23,10 +27,22 @@ def validate_script(source: str) -> tuple:
 
     Only strategy() scripts are accepted. indicator() scripts are rejected
     because they have no entry/exit logic and cannot be backtested or run as bots.
+    Scripts with dangerous Python patterns are also rejected.
     """
     try:
         from pineforge.lexer import Lexer
         from pineforge.parser import Parser
+
+        # Size check
+        if len(source.encode("utf-8")) > _MAX_SCRIPT_SIZE:
+            return False, f"Script is too large ({len(source.encode('utf-8'))} bytes). Maximum is {_MAX_SCRIPT_SIZE} bytes."
+
+        # Safety check: reject scripts with Python-specific dangerous patterns
+        if _DANGEROUS_PATTERNS.search(source):
+            return False, (
+                "Script contains disallowed patterns (import, exec, eval, or dunder attributes). "
+                "Pine Script does not use these constructs."
+            )
 
         # Check for indicator() — reject early with a clear message
         if re.search(r'\bindicator\s*\(', source):
@@ -142,8 +158,14 @@ async def run_backtest(
         result = engine.run(source, data)
         return result
 
-    async with _backtest_lock:
-        result = await loop.run_in_executor(None, _run)
+    # Each Engine.run() now creates its own ExecutionContext — safe to run in parallel
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, _run),
+            timeout=120,  # 2 minute timeout for backtests
+        )
+    except asyncio.TimeoutError:
+        raise Exception("Backtest timed out after 2 minutes. Try a shorter date range or simpler script.")
 
     trades = []
     for t in result.trades:

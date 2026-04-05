@@ -289,27 +289,144 @@ def ta_macd(source: Any, fastlen: Any = 12, slowlen: Any = 26, siglen: Any = 9):
     return macd_line, signal, histogram
 
 
-def register(interpreter) -> None:
-    funcs = {
-        "ta.sma": ta_sma,
-        "ta.ema": ta_ema,
-        "ta.rma": ta_rma,
-        "ta.rsi": ta_rsi,
-        "ta.crossover": ta_crossover,
-        "ta.crossunder": ta_crossunder,
-        "ta.highest": ta_highest,
-        "ta.lowest": ta_lowest,
-        "ta.change": ta_change,
-        "ta.stdev": ta_stdev,
-    }
+def register(interpreter, ctx=None) -> None:
+    if ctx is not None:
+        # Create closure-wrapped functions that use ctx.ta instead of _state
+        st = ctx.ta
+
+        def _ema(source: Any, length: Any) -> float:
+            length = int(_unwrap(length))
+            if not isinstance(source, Series):
+                return na_value()
+            k = 2.0 / (length + 1)
+            state_key = _series_key(source, length * 31)
+            current = source.current
+            if is_na(current):
+                return st._ema_state.get(state_key, na_value())
+            if state_key not in st._ema_state:
+                if len(source) >= length:
+                    vals = [source[i] for i in range(length)]
+                    valid = [v for v in vals if not is_na(v)]
+                    if len(valid) == length:
+                        st._ema_state[state_key] = sum(valid) / length
+                        return st._ema_state[state_key]
+                return na_value()
+            prev = st._ema_state[state_key]
+            result = current * k + prev * (1 - k)
+            st._ema_state[state_key] = result
+            return result
+
+        def _rma(source: Any, length: Any) -> float:
+            length = int(_unwrap(length))
+            if not isinstance(source, Series):
+                return na_value()
+            alpha = 1.0 / length
+            state_key = _series_key(source, length * 37)
+            current = source.current
+            if is_na(current):
+                return st._ema_state.get(state_key, na_value())
+            if state_key not in st._ema_state:
+                if len(source) >= length:
+                    vals = [source[i] for i in range(length)]
+                    valid = [v for v in vals if not is_na(v)]
+                    if len(valid) == length:
+                        st._ema_state[state_key] = sum(valid) / length
+                        return st._ema_state[state_key]
+                return na_value()
+            prev = st._ema_state[state_key]
+            result = alpha * current + (1 - alpha) * prev
+            st._ema_state[state_key] = result
+            return result
+
+        def _rsi(source: Any, length: Any) -> float:
+            length = int(_unwrap(length))
+            if not isinstance(source, Series) or len(source) < 2:
+                return na_value()
+            state_key = _series_key(source, length * 41)
+            change = source[0] - source[1] if not is_na(source[0]) and not is_na(source[1]) else na_value()
+            if is_na(change):
+                return na_value()
+            gain = max(change, 0.0)
+            loss = max(-change, 0.0)
+            if state_key not in st._rsi_state:
+                if len(source) < length + 1:
+                    return na_value()
+                gains, losses = [], []
+                for i in range(length):
+                    c = source[i] - source[i + 1]
+                    if is_na(c):
+                        return na_value()
+                    gains.append(max(c, 0.0))
+                    losses.append(max(-c, 0.0))
+                avg_gain = sum(gains) / length
+                avg_loss = sum(losses) / length
+                st._rsi_state[state_key] = {"avg_gain": avg_gain, "avg_loss": avg_loss}
+            else:
+                prev = st._rsi_state[state_key]
+                avg_gain = (prev["avg_gain"] * (length - 1) + gain) / length
+                avg_loss = (prev["avg_loss"] * (length - 1) + loss) / length
+                st._rsi_state[state_key] = {"avg_gain": avg_gain, "avg_loss": avg_loss}
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            return 100.0 - (100.0 / (1.0 + rs))
+
+        def _macd(source: Any, fastlen: Any = 12, slowlen: Any = 26, siglen: Any = 9):
+            fl = int(_unwrap(fastlen))
+            sl = int(_unwrap(slowlen))
+            sg = int(_unwrap(siglen))
+            fast = _ema(source, fl)
+            slow = _ema(source, sl)
+            if is_na(fast) or is_na(slow):
+                return na_value(), na_value(), na_value()
+            macd_line = fast - slow
+            src_id = getattr(source, "_id", id(source))
+            state_key = src_id * 100003 + fl * 1009 + sl
+            if state_key not in st._macd_line_series:
+                st._macd_line_series[state_key] = Series()
+            ml_series = st._macd_line_series[state_key]
+            ml_series.push(macd_line)
+            signal = _ema(ml_series, sg)
+            histogram = (macd_line - signal) if not is_na(signal) else na_value()
+            return macd_line, signal, histogram
+
+        funcs = {
+            "ta.sma": ta_sma,
+            "ta.ema": _ema,
+            "ta.rma": _rma,
+            "ta.rsi": _rsi,
+            "ta.crossover": ta_crossover,
+            "ta.crossunder": ta_crossunder,
+            "ta.highest": ta_highest,
+            "ta.lowest": ta_lowest,
+            "ta.change": ta_change,
+            "ta.stdev": ta_stdev,
+            "ta.macd": _macd,
+        }
+    else:
+        # Legacy path: use module-level _state global
+        funcs = {
+            "ta.sma": ta_sma,
+            "ta.ema": ta_ema,
+            "ta.rma": ta_rma,
+            "ta.rsi": ta_rsi,
+            "ta.crossover": ta_crossover,
+            "ta.crossunder": ta_crossunder,
+            "ta.highest": ta_highest,
+            "ta.lowest": ta_lowest,
+            "ta.change": ta_change,
+            "ta.stdev": ta_stdev,
+        }
     for name, fn in funcs.items():
         interpreter.register_builtin(name, fn)
 
 
-def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series) -> None:
+def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series,
+                    ctx=None) -> None:
     """Register indicators that depend on OHLCV series (ta.tr, ta.atr)."""
 
-    _state._atr_state = {}
+    ta_st = ctx.ta if ctx is not None else _state
+    ta_st._atr_state = {}
 
     def _ta_tr_wrapper() -> float:
         return ta_tr(high_s, low_s, close_s)
@@ -320,7 +437,7 @@ def register_ohlcv(interpreter, high_s: Series, low_s: Series, close_s: Series) 
         if is_na(tr_val):
             return na_value()
 
-        atr_state = _state._atr_state
+        atr_state = ta_st._atr_state
         alpha = 1.0 / length
         state_key = length
 

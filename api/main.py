@@ -1,6 +1,7 @@
 """FastAPI application factory and startup/shutdown hooks."""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,9 +11,12 @@ from .config import get_settings
 from .database import async_session, engine
 from .routers import accounts, admin, auth, bots, dashboard, payments, scripts
 from .services.bot_manager import BotManager
+from .services.log_cleanup import log_cleanup_loop
 from .services.script_service import seed_system_scripts
 
 logger = logging.getLogger(__name__)
+
+_app_start_time: float = 0.0
 
 
 async def _startup_tasks():
@@ -37,10 +41,14 @@ async def lifespan(app: FastAPI):
     )
     app.state.bot_manager = bot_manager
 
-    # Run slow startup tasks (seeding, bot restart) in background
+    global _app_start_time
+    _app_start_time = time.time()
+
+    # Run slow startup tasks (seeding, bot restart, log cleanup) in background
     import asyncio
     asyncio.create_task(_startup_tasks())
     asyncio.create_task(bot_manager.restart_crashed_bots())
+    asyncio.create_task(log_cleanup_loop(async_session))
 
     yield
 
@@ -95,4 +103,30 @@ async def preflight_handler(rest_of_path: str, request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    from sqlalchemy import text
+
+    db_ok = False
+    try:
+        async with async_session() as db:
+            await db.execute(text("SELECT 1"))
+            db_ok = True
+    except Exception:
+        pass
+
+    settings = get_settings()
+    running_bots = 0
+    if settings.MT5_BACKEND != "direct":
+        try:
+            running_bots = len(app.state.bot_manager._running_bots)
+        except Exception:
+            pass
+
+    uptime = int(time.time() - _app_start_time) if _app_start_time else 0
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "db_ok": db_ok,
+        "running_bots": running_bots,
+        "uptime_seconds": uptime,
+        "version": "0.2.0",
+    }

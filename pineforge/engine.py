@@ -13,8 +13,8 @@ from .broker import Broker
 from .data import DataFeed
 from .results import BacktestResult, compute_results
 from .builtins import math_funcs, ta as ta_module, input_funcs, strategy as strategy_module
-from .builtins.strategy import get_strategy_context
-from .builtins.ta import get_ta_state, register_ohlcv
+from .builtins.ta import register_ohlcv
+from .execution_context import ExecutionContext
 
 
 class Engine:
@@ -40,6 +40,9 @@ class Engine:
         tokens = Lexer(script_source).tokenize()
         ast = Parser(tokens).parse()
 
+        # Each run gets its own ExecutionContext — no shared global state
+        ectx = ExecutionContext()
+
         interp = Interpreter()
         broker = Broker(
             initial_capital=self.initial_capital,
@@ -49,18 +52,15 @@ class Engine:
         )
 
         math_funcs.register(interp)
-        ta_module.register(interp)
-        input_funcs.register(interp)
-        strategy_module.register(interp)
+        ta_module.register(interp, ctx=ectx)
+        input_funcs.register(interp, ctx=ectx)
+        strategy_module.register(interp, ctx=ectx)
 
         if input_overrides:
-            input_funcs.get_input_store().set_overrides(input_overrides)
+            ectx.inputs.set_overrides(input_overrides)
 
-        ctx = get_strategy_context()
-        ctx.reset()          # BUG 10: clear state from any previous run
+        ctx = ectx.strategy
         ctx.set_broker(broker)
-        ta_state = get_ta_state()
-        ta_state.reset()
 
         open_s = Series()
         high_s = Series()
@@ -83,7 +83,7 @@ class Engine:
         bar_index_s = Series()
         interp.env.define("bar_index", bar_index_s)
 
-        register_ohlcv(interp, high_s, low_s, close_s)
+        register_ohlcv(interp, high_s, low_s, close_s, ctx=ectx)
 
         interp.load_script(ast)
 
