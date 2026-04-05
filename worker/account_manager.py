@@ -68,15 +68,29 @@ class MT5Instance:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(5)  # Give terminal time to start
+        time.sleep(15)  # First launch needs time to download broker data
 
     def _initialize_and_login(self) -> bool:
-        """Initialize MT5 package and login to this terminal."""
+        """Initialize MT5 package and login to this terminal.
+
+        Retries initialization up to 3 times with increasing delays,
+        since the terminal may still be loading on first launch.
+        """
         import MetaTrader5 as mt5
 
-        if not mt5.initialize(path=str(self.terminal_path)):
+        # Retry initialization — terminal may need more time on first start
+        for attempt in range(3):
+            if mt5.initialize(path=str(self.terminal_path)):
+                break
             err = mt5.last_error()
-            logger.error("MT5 initialize failed for %s: %s", self.login, err)
+            logger.warning("MT5 initialize attempt %d/3 failed for %s: %s",
+                           attempt + 1, self.login, err)
+            if attempt < 2:
+                wait = 15 * (attempt + 1)
+                logger.info("Waiting %ds before retry...", wait)
+                time.sleep(wait)
+        else:
+            logger.error("MT5 initialize failed for %s after 3 attempts", self.login)
             return False
 
         if not mt5.login(login=int(self.login), password=self.password, server=self.server):
