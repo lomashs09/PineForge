@@ -1,7 +1,8 @@
 """Manages multiple MT5 terminal instances — one per broker account.
 
 Each account gets its own MT5 installation directory and terminal process.
-The MetaTrader5 Python package connects to a specific terminal by path.
+The MetaTrader5 Python package handles starting the terminal and logging in
+via mt5.initialize(path=..., login=..., password=..., server=..., portable=True).
 
 Directory structure on Windows:
   C:\MT5\
@@ -14,7 +15,6 @@ import asyncio
 import logging
 import os
 import shutil
-import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -38,7 +38,6 @@ class MT5Instance:
         self.dir = MT5_BASE_DIR / f"Acc_{mt5_login}"
         self.terminal_path = self.dir / "terminal64.exe"
         self.connected = False
-        self.process: Optional[subprocess.Popen] = None
 
     def _ensure_installed(self) -> bool:
         """Copy MT5 from template if not already installed for this account."""
@@ -54,86 +53,59 @@ class MT5Instance:
         self.dir.mkdir(parents=True, exist_ok=True)
         shutil.copytree(MT5_TEMPLATE_DIR, self.dir, dirs_exist_ok=True)
         logger.info("MT5 copied to %s", self.dir)
-
-        # Write startup config so terminal auto-connects without "Open an Account" dialog
-        self._write_startup_config()
         return True
 
-    def _write_startup_config(self):
-        """Write an .ini file so the terminal auto-connects on first launch."""
-        # MT5 reads start.ini from its directory on startup in /portable mode
-        ini_path = self.dir / "start.ini"
-        ini_content = (
-            f"[Common]\n"
-            f"Login={self.login}\n"
-            f"Password={self.password}\n"
-            f"Server={self.server}\n"
-            f"KeepPrivate=1\n"
-            f"NewsEnable=0\n"
-            f"CommunityLogin=\n"
-        )
-        ini_path.write_text(ini_content, encoding="utf-8")
-        logger.info("Wrote start.ini for %s@%s", self.login, self.server)
-
-    def _start_terminal(self):
-        """Start the MT5 terminal process."""
-        if self.process and self.process.poll() is None:
-            return  # Already running
-
-        logger.info("Starting MT5 terminal for %s@%s", self.login, self.server)
-        self.process = subprocess.Popen(
-            [str(self.terminal_path), "/portable", "/config:start.ini"],
-            cwd=str(self.dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(20)  # First launch needs time to download broker data
-
     def _initialize_and_login(self) -> bool:
-        """Initialize MT5 package and login to this terminal.
+        """Let the MT5 Python package start the terminal and login in one call.
 
-        Retries initialization up to 3 times with increasing delays,
-        since the terminal may still be loading on first launch.
+        mt5.initialize() with login/password/server handles everything:
+        starts terminal, skips dialogs, connects, and logs in.
+        Retries up to 3 times with increasing delays for first launch.
         """
         import MetaTrader5 as mt5
 
-        # Retry initialization — terminal may need more time on first start
+        init_kwargs = {
+            "path": str(self.terminal_path),
+            "login": int(self.login),
+            "password": self.password,
+            "server": self.server,
+            "portable": True,
+            "timeout": 60000,  # 60s timeout for first launch
+        }
+
         for attempt in range(3):
-            if mt5.initialize(path=str(self.terminal_path)):
-                break
+            logger.info("MT5 initialize attempt %d/3 for %s@%s",
+                        attempt + 1, self.login, self.server)
+            if mt5.initialize(**init_kwargs):
+                info = mt5.account_info()
+                if info:
+                    logger.info("Logged in: %s (%d) balance=%.2f %s",
+                                info.name, info.login, info.balance, info.currency)
+                    self.connected = True
+                    return True
+                else:
+                    logger.warning("MT5 initialized but account_info() returned None")
+
             err = mt5.last_error()
             logger.warning("MT5 initialize attempt %d/3 failed for %s: %s",
                            attempt + 1, self.login, err)
+            mt5.shutdown()
+
             if attempt < 2:
                 wait = 15 * (attempt + 1)
                 logger.info("Waiting %ds before retry...", wait)
                 time.sleep(wait)
-        else:
-            logger.error("MT5 initialize failed for %s after 3 attempts", self.login)
-            return False
 
-        if not mt5.login(login=int(self.login), password=self.password, server=self.server):
-            err = mt5.last_error()
-            logger.error("MT5 login failed for %s@%s: %s", self.login, self.server, err)
-            return False
+        logger.error("MT5 initialize failed for %s after 3 attempts", self.login)
+        return False
 
-        info = mt5.account_info()
-        logger.info("Logged in: %s (%d) balance=%.2f %s",
-                     info.name, info.login, info.balance, info.currency)
-        self.connected = True
-        return True
-
-    def _shutdown(self):
-        """Shutdown MT5 connection (not the terminal process)."""
-        import MetaTrader5 as mt5
-        mt5.shutdown()
-        self.connected = False
-
-    def stop_terminal(self):
-        """Kill the terminal process."""
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            self.process.wait(timeout=10)
+    def shutdown(self):
+        """Shutdown MT5 connection and terminal."""
+        try:
+            import MetaTrader5 as mt5
+            mt5.shutdown()
+        except Exception:
+            pass
         self.connected = False
 
 
@@ -153,7 +125,7 @@ class AccountManager:
             instance = MT5Instance(mt5_login, mt5_password, mt5_server)
             loop = asyncio.get_event_loop()
 
-            # Install, start, and login — all in thread (blocking operations)
+            # Install and login — all in thread (blocking operations)
             ok = await loop.run_in_executor(_executor, self._setup_instance, instance)
             if not ok:
                 raise RuntimeError(f"Failed to setup MT5 for {mt5_login}@{mt5_server}")
@@ -166,7 +138,6 @@ class AccountManager:
         """Setup MT5 instance (runs in thread)."""
         if not instance._ensure_installed():
             return False
-        instance._start_terminal()
         return instance._initialize_and_login()
 
     async def get_instance(self, mt5_login: str) -> Optional[MT5Instance]:
@@ -177,5 +148,5 @@ class AccountManager:
         """Stop all terminal instances."""
         for login, instance in self._instances.items():
             logger.info("Shutting down MT5 for %s", login)
-            instance.stop_terminal()
+            instance.shutdown()
         self._instances.clear()
