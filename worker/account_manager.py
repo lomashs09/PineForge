@@ -62,13 +62,17 @@ class MT5Instance:
             return  # Already running
 
         logger.info("Starting MT5 terminal for %s@%s", self.login, self.server)
+        # Pass /login and /server to auto-login and skip "Open an Account" dialog
+        cmd = [str(self.terminal_path), "/portable",
+               f"/login={self.login}", f"/password={self.password}",
+               f"/server={self.server}"]
         self.process = subprocess.Popen(
-            [str(self.terminal_path), "/portable"],
+            cmd,
             cwd=str(self.dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(15)  # First launch needs time to download broker data
+        time.sleep(20)  # First launch needs time to download broker data
 
     def _initialize_and_login(self) -> bool:
         """Initialize MT5 package and login to this terminal.
