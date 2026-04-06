@@ -204,10 +204,14 @@ class BotManager:
         except Exception as e:
             logger.warning("Failed to undeploy account %s: %s", metaapi_account_id, e)
 
-    async def stop_bot(self, bot_id: uuid.UUID) -> None:
-        """Gracefully stop a running bot."""
+    async def stop_bot(self, bot_id: uuid.UUID) -> dict:
+        """Gracefully stop a running bot and close all its open positions.
+
+        Returns dict with positions_closed count and pnl.
+        """
         bridge = self._bot_bridges.get(bot_id)
         task = self._running_bots.get(bot_id)
+        close_result = {"positions_closed": 0, "pnl": 0.0}
 
         if bridge is None or task is None:
             # Not running in memory, just update DB
@@ -219,7 +223,20 @@ class BotManager:
                     bot.error_message = None
                     bot.stopped_at = datetime.now(timezone.utc)
                     await db.commit()
-            return
+            return close_result
+
+        # Close all open positions for this bot's symbol before stopping
+        try:
+            executor = getattr(bridge, '_executor', None)
+            if executor:
+                positions = await executor.get_positions()
+                if positions:
+                    pnl = sum(p.get("profit", 0) or 0 for p in positions)
+                    await executor.close_all()
+                    close_result = {"positions_closed": len(positions), "pnl": round(pnl, 2)}
+                    print(f"[BotManager] Closed {len(positions)} positions for bot {bot_id} (pnl: ${pnl:.2f})", flush=True)
+        except Exception as e:
+            print(f"[BotManager] Failed to close positions for {bot_id}: {e}", flush=True)
 
         # Signal graceful shutdown
         bridge._shutdown = True
@@ -235,6 +252,8 @@ class BotManager:
                 pass
         except asyncio.CancelledError:
             pass
+
+        return close_result
 
     def get_status(self, bot_id: uuid.UUID) -> Optional[dict]:
         """Get live status from the in-memory bridge instance."""

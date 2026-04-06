@@ -253,10 +253,10 @@ async def stop_bot(
             await db.flush()
     else:
         bot_manager = _get_bot_manager(request)
-        await bot_manager.stop_bot(bot_id)
+        close_result = await bot_manager.stop_bot(bot_id)
 
     await db.refresh(bot)
-    return BotStatusResponse(
+    resp = BotStatusResponse(
         id=bot.id,
         name=bot.name,
         status=bot.status,
@@ -267,6 +267,11 @@ async def stop_bot(
         started_at=bot.started_at,
         stopped_at=bot.stopped_at,
     )
+    # Include position close info in response
+    if settings.MT5_BACKEND != "direct" and close_result:
+        resp.positions_closed = close_result.get("positions_closed", 0)
+        resp.close_pnl = close_result.get("pnl", 0.0)
+    return resp
 
 
 @router.get("/{bot_id}/logs", response_model=BotLogsPage)

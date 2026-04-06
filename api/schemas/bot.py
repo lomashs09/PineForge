@@ -90,9 +90,12 @@ class BotStatusResponse(BaseModel):
     lot_size: float
     is_live: bool
     started_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
     uptime_seconds: int = 0
     bars_processed: int = 0
     last_signal: Optional[str] = None
+    positions_closed: int = 0
+    close_pnl: float = 0.0
 
 
 class BotLogResponse(BaseModel):
