@@ -295,7 +295,7 @@ class LiveBridge:
                 print(f"  [ERROR] ({self._consecutive_errors}x) {e}", flush=True)
 
                 # After 3 consecutive errors, try to reconnect
-                if self._consecutive_errors >= 3 and cfg.mt5_backend != "bridge":
+                if self._consecutive_errors >= 3 and cfg.mt5_backend == "metaapi":
                     print("  Multiple failures — attempting reconnect...", flush=True)
                     try:
                         await self._reconnect_metaapi(cfg)

@@ -125,10 +125,10 @@ async def get_account(
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # Try to fetch live balance
+    # Try to fetch live balance (only for MetaAPI-provisioned accounts)
     settings = get_settings()
     balance_info = {}
-    if settings.METAAPI_TOKEN:
+    if settings.METAAPI_TOKEN and account.metaapi_account_id and not account.metaapi_account_id.startswith("direct-"):
         try:
             balance_info = await get_account_info(settings.METAAPI_TOKEN, account.metaapi_account_id)
         except Exception:
@@ -196,6 +196,8 @@ async def get_positions(
     settings = get_settings()
     if not settings.METAAPI_TOKEN:
         raise HTTPException(status_code=500, detail="MetaAPI token not configured")
+    if account.metaapi_account_id and account.metaapi_account_id.startswith("direct-"):
+        raise HTTPException(status_code=400, detail="Positions not available for direct-mode accounts. Use MetaAPI mode.")
 
     try:
         positions = await get_account_positions(settings.METAAPI_TOKEN, account.metaapi_account_id)

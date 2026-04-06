@@ -42,11 +42,16 @@ class LiveConfig:
 
     def validate(self) -> list[str]:
         errors = []
+        if self.mt5_backend not in ("metaapi", "bridge", "direct"):
+            errors.append(f"Invalid mt5_backend: {self.mt5_backend}. Must be metaapi, bridge, or direct")
         if self.mt5_backend == "metaapi":
             if not self.metaapi_token:
                 errors.append("METAAPI_TOKEN is not set")
             if not self.metaapi_account_id:
                 errors.append("METAAPI_ACCOUNT_ID is not set")
+        if self.mt5_backend == "bridge":
+            if not self.mt5_bridge_url:
+                errors.append("mt5_bridge_url is required for bridge backend")
         if not self.script_path and not self.script_source:
             errors.append("--script is required")
         if self.lot_size <= 0:
