@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -365,3 +366,73 @@ async def get_bot_statistics(
 
     stats = await get_bot_stats(db, bot_id)
     return stats
+
+
+@router.get("/{bot_id}/positions")
+async def get_bot_positions(
+    bot_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get open positions for a running bot's symbol."""
+    result = await db.execute(
+        select(Bot)
+        .options(selectinload(Bot.broker_account))
+        .where(Bot.id == bot_id, Bot.user_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
+    if bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    from ..config import get_settings as _get_settings
+    settings = _get_settings()
+
+    if not settings.METAAPI_TOKEN or settings.MT5_BACKEND == "direct":
+        return []
+
+    account = bot.broker_account
+    if not account or not account.metaapi_account_id or account.metaapi_account_id.startswith("direct-"):
+        return []
+
+    try:
+        from ..services.account_service import get_account_positions
+        all_positions = await get_account_positions(settings.METAAPI_TOKEN, account.metaapi_account_id)
+        # Filter to this bot's symbol
+        return [p for p in all_positions if p.get("symbol") == bot.symbol]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch positions: {str(e)}")
+
+
+@router.get("/{bot_id}/account-info")
+async def get_bot_account_info(
+    bot_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get broker account info (balance, equity, margin) for a bot's account."""
+    result = await db.execute(
+        select(Bot)
+        .options(selectinload(Bot.broker_account))
+        .where(Bot.id == bot_id, Bot.user_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
+    if bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    from ..config import get_settings as _get_settings
+    settings = _get_settings()
+
+    if not settings.METAAPI_TOKEN or settings.MT5_BACKEND == "direct":
+        return {"balance": 0, "equity": 0, "margin": 0, "freeMargin": 0, "marginLevel": 0, "currency": "USD"}
+
+    account = bot.broker_account
+    if not account or not account.metaapi_account_id or account.metaapi_account_id.startswith("direct-"):
+        return {"balance": 0, "equity": 0, "margin": 0, "freeMargin": 0, "marginLevel": 0, "currency": "USD"}
+
+    try:
+        from ..services.account_service import get_account_info
+        return await get_account_info(settings.METAAPI_TOKEN, account.metaapi_account_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch account info: {str(e)}")

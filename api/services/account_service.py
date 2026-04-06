@@ -138,6 +138,9 @@ async def get_account_info(metaapi_token: str, metaapi_account_id: str) -> dict:
     return {
         "balance": info.get("balance", 0),
         "equity": info.get("equity", 0),
+        "margin": info.get("margin", 0),
+        "freeMargin": info.get("freeMargin", 0),
+        "marginLevel": info.get("marginLevel", 0),
         "currency": info.get("currency", "USD"),
     }
 
