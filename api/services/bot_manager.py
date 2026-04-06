@@ -32,6 +32,7 @@ class BotManager:
         self._bot_bridges: Dict[uuid.UUID, object] = {}  # LiveBridge instances
         self._bot_loggers: Dict[uuid.UUID, BotDatabaseHandler] = {}
         self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
+        self._shutting_down = False  # Set during app shutdown to skip status updates
 
     async def start_bot(self, bot_id: uuid.UUID) -> None:
         """Load bot config from DB and start it as an asyncio task."""
@@ -135,13 +136,15 @@ class BotManager:
                     await db.commit()
 
         except asyncio.CancelledError:
-            async with self._session_factory() as db:
-                result = await db.execute(select(Bot).where(Bot.id == bot_id))
-                bot = result.scalar_one_or_none()
-                if bot:
-                    bot.status = "stopped"
-                    bot.stopped_at = datetime.now(timezone.utc)
-                    await db.commit()
+            # During server shutdown, keep status as "running" for auto-restart
+            if not self._shutting_down:
+                async with self._session_factory() as db:
+                    result = await db.execute(select(Bot).where(Bot.id == bot_id))
+                    bot = result.scalar_one_or_none()
+                    if bot:
+                        bot.status = "stopped"
+                        bot.stopped_at = datetime.now(timezone.utc)
+                        await db.commit()
 
         except Exception as e:
             logger.error("Bot %s crashed: %s", bot_id, e, exc_info=True)
@@ -294,10 +297,24 @@ class BotManager:
             await asyncio.sleep(5)
 
     async def shutdown_all(self) -> None:
-        """Stop all running bots (called on app shutdown)."""
-        bot_ids = list(self._running_bots.keys())
-        for bot_id in bot_ids:
+        """Stop all running bot tasks on app shutdown.
+
+        Keeps bot status as 'running' in DB so restart_crashed_bots()
+        will auto-restart them when the server comes back up.
+        """
+        self._shutting_down = True
+        for bot_id, task in list(self._running_bots.items()):
             try:
-                await self.stop_bot(bot_id)
+                bridge = self._bot_bridges.get(bot_id)
+                if bridge:
+                    bridge._shutdown = True
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=5)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
             except Exception as e:
                 logger.error("Error stopping bot %s during shutdown: %s", bot_id, e)
+        self._running_bots.clear()
+        self._bot_bridges.clear()
+        logger.info("All bot tasks stopped (status kept as 'running' for auto-restart)")
