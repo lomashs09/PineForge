@@ -105,6 +105,61 @@ async def create_checkout_session(
     return {"checkout_url": session.url}
 
 
+# ── Add Funds (one-time payment) ──────────────────────────────────
+
+
+class AddFundsRequest(BaseModel):
+    amount: float  # USD amount to add (minimum $10)
+
+
+@router.post("/add-funds")
+async def add_funds(
+    body: AddFundsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    settings = get_settings()
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    if body.amount < 10:
+        raise HTTPException(status_code=400, detail="Minimum top-up amount is $10.00")
+    if body.amount > 1000:
+        raise HTTPException(status_code=400, detail="Maximum top-up amount is $1,000.00")
+
+    # Reuse existing Stripe customer or create one
+    customer_id = current_user.stripe_customer_id
+    if not customer_id:
+        customer = stripe.Customer.create(
+            email=current_user.email,
+            name=current_user.full_name,
+            metadata={"user_id": str(current_user.id)},
+        )
+        customer_id = customer.id
+        current_user.stripe_customer_id = customer_id
+        await db.flush()
+
+    amount_cents = int(body.amount * 100)
+    session = stripe.checkout.Session.create(
+        customer=customer_id,
+        mode="payment",
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "unit_amount": amount_cents,
+                "product_data": {
+                    "name": f"PineForge Balance Top-Up (${body.amount:.2f})",
+                },
+            },
+            "quantity": 1,
+        }],
+        success_url=f"{settings.FRONTEND_URL}/billing?funded=1",
+        cancel_url=f"{settings.FRONTEND_URL}/billing",
+        metadata={"user_id": str(current_user.id), "type": "add_funds", "amount": str(body.amount)},
+    )
+
+    return {"checkout_url": session.url}
+
+
 # ── Billing Portal ────────────────────────────────────────────────
 
 
@@ -156,6 +211,9 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     ):
         await _handle_subscription_cancelled(data, db)
 
+    elif event_type == "checkout.session.completed":
+        await _handle_checkout_completed(data, db)
+
     return {"received": True}
 
 
@@ -195,4 +253,29 @@ async def _handle_subscription_cancelled(subscription: dict, db: AsyncSession) -
 
     _apply_plan(user, "free")
     user.stripe_subscription_id = None
+    await db.commit()
+
+
+async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
+    """Handle one-time payment completion (add funds)."""
+    metadata = session.get("metadata", {})
+    if metadata.get("type") != "add_funds":
+        return  # Not an add-funds checkout
+
+    user_id = metadata.get("user_id")
+    amount = float(metadata.get("amount", 0))
+    if not user_id or amount <= 0:
+        return
+
+    import uuid
+    result = await db.execute(
+        select(User).where(User.id == uuid.UUID(user_id))
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        logger.warning("Webhook add-funds: no user for id %s", user_id)
+        return
+
+    user.balance = (user.balance or 0) + amount
+    logger.info("Added $%.2f to user %s balance (new: $%.2f)", amount, user.email, user.balance)
     await db.commit()

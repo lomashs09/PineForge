@@ -135,6 +135,7 @@ async def get_usage(
             })
 
     return {
+        "balance": current_user.balance or 0.0,
         "period_start": period_start.isoformat(),
         "active_bot_hours": round(active_bot_hours, 2),
         "active_bot_cost": round(active_bot_cost, 2),
