@@ -467,7 +467,13 @@ async def get_bot_trade_history(
 
     # Get deals since bot started (or last 24h if no start time)
     from datetime import datetime as dt, timezone as tz, timedelta
-    start = bot.started_at or (dt.now(tz.utc) - timedelta(hours=24))
+    start = bot.started_at
+    if start and isinstance(start, str):
+        start = dt.fromisoformat(start)
+    if not start:
+        start = dt.now(tz.utc) - timedelta(hours=24)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=tz.utc)
     end = dt.now(tz.utc)
 
     try:
@@ -475,8 +481,8 @@ async def get_bot_trade_history(
         deals = await get_history_deals(
             settings.METAAPI_TOKEN,
             account.metaapi_account_id,
-            start.isoformat(),
-            end.isoformat(),
+            start,
+            end,
             symbol=bot.symbol,
         )
 

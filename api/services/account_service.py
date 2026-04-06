@@ -174,8 +174,8 @@ async def get_account_positions(metaapi_token: str, metaapi_account_id: str) -> 
 async def get_history_deals(
     metaapi_token: str,
     metaapi_account_id: str,
-    start_time: str,
-    end_time: str,
+    start_time,
+    end_time,
     symbol: str = None,
 ) -> list:
     """Get closed trade history (deals) from MetaAPI.
