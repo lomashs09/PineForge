@@ -254,6 +254,7 @@ class BotManager:
         """
         # Wait a bit for the server to fully start before reconnecting bots
         await asyncio.sleep(5)
+        print("[BotManager] Checking for bots to auto-restart...", flush=True)
 
         try:
             async with self._session_factory() as db:
@@ -262,25 +263,26 @@ class BotManager:
                 )
                 bots = result.scalars().all()
         except Exception as e:
-            logger.warning("Failed to query crashed bots: %s", e)
+            print(f"[BotManager] Failed to query bots: {e}", flush=True)
             return
 
         if not bots:
+            print("[BotManager] No bots need restarting.", flush=True)
             return
 
-        logger.info("Found %d bots to restart", len(bots))
+        print(f"[BotManager] Found {len(bots)} bots to restart", flush=True)
 
         for bot in bots:
             success = False
             for attempt in range(3):
                 try:
-                    logger.info("Restarting bot %s (%s) — attempt %d/3", bot.id, bot.name, attempt + 1)
+                    print(f"[BotManager] Restarting bot {bot.name} — attempt {attempt + 1}/3", flush=True)
                     await self.start_bot(bot.id)
-                    logger.info("Bot %s restarted successfully", bot.name)
+                    print(f"[BotManager] Bot {bot.name} restarted successfully", flush=True)
                     success = True
                     break
                 except Exception as e:
-                    logger.error("Restart attempt %d failed for %s: %s", attempt + 1, bot.name, e)
+                    print(f"[BotManager] Restart attempt {attempt + 1} failed for {bot.name}: {e}", flush=True)
                     if attempt < 2:
                         await asyncio.sleep(10)  # Wait before retry
 
