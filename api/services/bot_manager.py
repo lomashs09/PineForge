@@ -158,7 +158,8 @@ class BotManager:
             sys.stdout = original_stdout
             await db_handler.stop()
             bot_logger.removeHandler(db_handler)
-            await self._undeploy_account(bot_id)
+            # Keep account deployed — redeploying costs $0.13 and takes 30-60s.
+            # Accounts only undeploy when user disconnects from Accounts page.
             self._running_bots.pop(bot_id, None)
             self._bot_bridges.pop(bot_id, None)
             self._bot_loggers.pop(bot_id, None)
