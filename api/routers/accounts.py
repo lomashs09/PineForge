@@ -49,7 +49,7 @@ async def create_account(
     db: AsyncSession = Depends(get_db),
 ):
     # Check account limit (non-admin: 1 account on free plan)
-    max_accounts = 99 if current_user.is_admin else 1
+    max_accounts = 99 if current_user.is_admin else 2
     result = await db.execute(
         select(func.count(BrokerAccount.id)).where(
             BrokerAccount.user_id == current_user.id,
