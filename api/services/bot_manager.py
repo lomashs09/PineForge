@@ -36,8 +36,14 @@ class BotManager:
 
     async def start_bot(self, bot_id: uuid.UUID, _is_restart: bool = False) -> None:
         """Load bot config from DB and start it as an asyncio task."""
-        if bot_id in self._running_bots and not _is_restart:
-            raise RuntimeError(f"Bot {bot_id} is already running")
+        if bot_id in self._running_bots:
+            if not _is_restart:
+                raise RuntimeError(f"Bot {bot_id} is already running")
+            # During restart, clean up stale references from previous run
+            self._running_bots.pop(bot_id, None)
+            self._bot_bridges.pop(bot_id, None)
+            self._bot_loggers.pop(bot_id, None)
+            self._bot_account_ids.pop(bot_id, None)
 
         from pineforge.live.bridge import LiveBridge
         from pineforge.live.config import LiveConfig
