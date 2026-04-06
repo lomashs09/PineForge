@@ -163,7 +163,7 @@ class LiveBridge:
         self._print(f"  Timeframe: {cfg.timeframe}")
         self._print(f"  Lot size:  {cfg.lot_size}")
         self._print(f"  Poll:      every {cfg.poll_interval_seconds}s")
-        self._print(f"  Backend:   {cfg.mt5_backend}")
+        self._print(f"  Backend:   {'cloud' if cfg.mt5_backend == 'metaapi' else cfg.mt5_backend}")
         if not cfg.is_live:
             print(flush=True)
             self._print("  ** DRY RUN — no real orders will be placed **")
@@ -207,7 +207,7 @@ class LiveBridge:
         else:
             from metaapi_cloud_sdk import MetaApi
 
-            self._print("Connecting to MetaAPI...")
+            self._print("Connecting to broker...")
             api = MetaApi(token=cfg.metaapi_token)
             account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
 
@@ -343,7 +343,7 @@ class LiveBridge:
             except Exception:
                 pass
 
-        self._print("  Reconnecting to MetaAPI...")
+        self._print("  Reconnecting to broker...")
         api = MetaApi(token=cfg.metaapi_token)
         account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
         self._print(f"  Account state: {account.state}")
