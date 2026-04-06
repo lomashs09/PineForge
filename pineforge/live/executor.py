@@ -21,12 +21,19 @@ class Executor:
         self._conn = connection
         self._symbol = symbol
         self._is_live = is_live
+        self._print_fn = None  # Set by bridge for per-bot output isolation
+
+    def _print(self, *args):
+        if self._print_fn:
+            self._print_fn(*args)
+        else:
+            print(*args, flush=True)
 
     async def open_buy(self, volume: float) -> dict[str, Any] | None:
         """Place a market buy order."""
         logger.info("BUY %s %.2f lots of %s", "LIVE" if self._is_live else "DRY", volume, self._symbol)
         if not self._is_live:
-            print(f"  [DRY RUN] Would BUY {volume} lots of {self._symbol}", flush=True)
+            self._print(f"  [DRY RUN] Would BUY {volume} lots of {self._symbol}")
             return {"dry_run": True, "action": "buy", "volume": volume}
         try:
             result = await asyncio.wait_for(
@@ -35,22 +42,22 @@ class Executor:
             )
             logger.info("BUY order filled: %s", result)
             price = result.get('price', result.get('openPrice', ''))
-            print(f"  [LIVE] BUY {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}", flush=True)
+            self._print(f"  [LIVE] BUY {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}")
             return result
         except asyncio.TimeoutError:
             logger.error("BUY order timed out after %ds", TIMEOUT)
-            print(f"  [ERROR] BUY timed out after {TIMEOUT}s", flush=True)
+            self._print(f"  [ERROR] BUY timed out after {TIMEOUT}s")
             return None
         except Exception as e:
             logger.error("BUY order failed: %s", e)
-            print(f"  [ERROR] BUY failed: {e}", flush=True)
+            self._print(f"  [ERROR] BUY failed: {e}")
             return None
 
     async def open_sell(self, volume: float) -> dict[str, Any] | None:
         """Place a market sell order."""
         logger.info("SELL %s %.2f lots of %s", "LIVE" if self._is_live else "DRY", volume, self._symbol)
         if not self._is_live:
-            print(f"  [DRY RUN] Would SELL {volume} lots of {self._symbol}", flush=True)
+            self._print(f"  [DRY RUN] Would SELL {volume} lots of {self._symbol}")
             return {"dry_run": True, "action": "sell", "volume": volume}
         try:
             result = await asyncio.wait_for(
@@ -59,22 +66,22 @@ class Executor:
             )
             logger.info("SELL order filled: %s", result)
             price = result.get('price', result.get('openPrice', ''))
-            print(f"  [LIVE] SELL {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}", flush=True)
+            self._print(f"  [LIVE] SELL {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}")
             return result
         except asyncio.TimeoutError:
             logger.error("SELL order timed out after %ds", TIMEOUT)
-            print(f"  [ERROR] SELL timed out after {TIMEOUT}s", flush=True)
+            self._print(f"  [ERROR] SELL timed out after {TIMEOUT}s")
             return None
         except Exception as e:
             logger.error("SELL order failed: %s", e)
-            print(f"  [ERROR] SELL failed: {e}", flush=True)
+            self._print(f"  [ERROR] SELL failed: {e}")
             return None
 
     async def close_all(self) -> bool:
         """Close all open positions for the symbol."""
         logger.info("CLOSE ALL %s %s", "LIVE" if self._is_live else "DRY", self._symbol)
         if not self._is_live:
-            print(f"  [DRY RUN] Would CLOSE ALL {self._symbol} positions pnl=0.00", flush=True)
+            self._print(f"  [DRY RUN] Would CLOSE ALL {self._symbol} positions pnl=0.00")
             return True
         try:
             # Get position profit before closing
@@ -91,22 +98,22 @@ class Executor:
                 timeout=TIMEOUT,
             )
             logger.info("Close all result: %s", result)
-            print(f"  [LIVE] Closed all {self._symbol} positions pnl={pnl:.2f}", flush=True)
+            self._print(f"  [LIVE] Closed all {self._symbol} positions pnl={pnl:.2f}")
             return True
         except asyncio.TimeoutError:
             logger.error("Close all timed out after %ds", TIMEOUT)
-            print(f"  [ERROR] Close all timed out after {TIMEOUT}s", flush=True)
+            self._print(f"  [ERROR] Close all timed out after {TIMEOUT}s")
             return False
         except Exception as e:
             logger.error("Close all failed: %s", e)
-            print(f"  [ERROR] Close all failed: {e}", flush=True)
+            self._print(f"  [ERROR] Close all failed: {e}")
             return False
 
     async def close_position(self, position_id: str) -> bool:
         """Close a specific position by ID."""
         logger.info("CLOSE position %s %s", position_id, "LIVE" if self._is_live else "DRY")
         if not self._is_live:
-            print(f"  [DRY RUN] Would CLOSE position {position_id}", flush=True)
+            self._print(f"  [DRY RUN] Would CLOSE position {position_id}")
             return True
         try:
             result = await asyncio.wait_for(
@@ -114,15 +121,15 @@ class Executor:
                 timeout=TIMEOUT,
             )
             logger.info("Close position result: %s", result)
-            print(f"  [LIVE] Closed position {position_id}", flush=True)
+            self._print(f"  [LIVE] Closed position {position_id}")
             return True
         except asyncio.TimeoutError:
             logger.error("Close position %s timed out after %ds", position_id, TIMEOUT)
-            print(f"  [ERROR] Close position timed out after {TIMEOUT}s", flush=True)
+            self._print(f"  [ERROR] Close position timed out after {TIMEOUT}s")
             return False
         except Exception as e:
             logger.error("Close position %s failed: %s", position_id, e)
-            print(f"  [ERROR] Close position failed: {e}", flush=True)
+            self._print(f"  [ERROR] Close position failed: {e}")
             return False
 
     async def get_positions(self) -> list[dict[str, Any]]:

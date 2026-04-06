@@ -63,6 +63,14 @@ class LiveBridge:
         self._bar_count = 0
         self._connector = None  # Set when using bridge backend
         self._ectx: ExecutionContext | None = None
+        self._print_fn = None  # Set by BotManager for per-bot output isolation
+
+    def _print(self, *args, **kwargs):
+        """Print that routes to per-bot logger when running under BotManager."""
+        if self._print_fn:
+            self._print_fn(*args)
+        else:
+            print(*args, flush=True, **kwargs)
 
     def _init_interpreter(self):
         """Parse the script and set up the interpreter."""
@@ -146,21 +154,21 @@ class LiveBridge:
         cfg = self.config
         mode_str = "LIVE" if cfg.is_live else "DRY RUN"
 
-        print("=" * 60, flush=True)
-        print(f"  PineForge Live Trading Bridge ({mode_str})", flush=True)
-        print("=" * 60, flush=True)
+        self._print("=" * 60)
+        self._print(f"  PineForge Live Trading Bridge ({mode_str})")
+        self._print("=" * 60)
         script_label = Path(cfg.script_path).name if cfg.script_path else "API Script"
-        print(f"  Script:    {script_label}", flush=True)
-        print(f"  Symbol:    {cfg.symbol}", flush=True)
-        print(f"  Timeframe: {cfg.timeframe}", flush=True)
-        print(f"  Lot size:  {cfg.lot_size}", flush=True)
-        print(f"  Poll:      every {cfg.poll_interval_seconds}s", flush=True)
-        print(f"  Backend:   {cfg.mt5_backend}", flush=True)
+        self._print(f"  Script:    {script_label}")
+        self._print(f"  Symbol:    {cfg.symbol}")
+        self._print(f"  Timeframe: {cfg.timeframe}")
+        self._print(f"  Lot size:  {cfg.lot_size}")
+        self._print(f"  Poll:      every {cfg.poll_interval_seconds}s")
+        self._print(f"  Backend:   {cfg.mt5_backend}")
         if not cfg.is_live:
             print(flush=True)
-            print("  ** DRY RUN — no real orders will be placed **", flush=True)
-            print("  ** Add --live flag to enable real trading **", flush=True)
-        print("=" * 60, flush=True)
+            self._print("  ** DRY RUN — no real orders will be placed **")
+            self._print("  ** Add --live flag to enable real trading **")
+        self._print("=" * 60)
         print(flush=True)
 
         # ── Connect to MT5 (MetaAPI or self-hosted bridge) ────────────
@@ -170,7 +178,7 @@ class LiveBridge:
 
         if cfg.mt5_backend == "direct":
             # Direct MT5 access — worker sets _direct_executor_cls
-            print("Using direct MT5 terminal connection...", flush=True)
+            self._print("Using direct MT5 terminal connection...")
             executor_cls = getattr(self, '_direct_executor_cls', None)
             if executor_cls is None:
                 raise RuntimeError("mt5_backend=direct but no _direct_executor_cls set. Run via worker.")
@@ -179,7 +187,7 @@ class LiveBridge:
             acct_info = await executor.get_account_info()
             if acct_info:
                 balance = acct_info.get("balance", 0)
-                print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}", flush=True)
+                self._print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}")
                 self.risk.reset_daily(balance)
             print(flush=True)
 
@@ -187,45 +195,45 @@ class LiveBridge:
             from .connector import create_connector
             from .connector_executor import ConnectorExecutor
 
-            print(f"Connecting to MT5 bridge at {cfg.mt5_bridge_url}...", flush=True)
+            self._print(f"Connecting to MT5 bridge at {cfg.mt5_bridge_url}...")
             connector = create_connector(
                 backend="bridge",
                 bridge_url=cfg.mt5_bridge_url,
             )
             await connector.connect()
-            print("Connected to MT5 via self-hosted bridge.\n", flush=True)
+            self._print("Connected to MT5 via self-hosted bridge.\n")
 
             executor = ConnectorExecutor(connector, cfg.symbol, cfg.is_live)
         else:
             from metaapi_cloud_sdk import MetaApi
 
-            print("Connecting to MetaAPI...", flush=True)
+            self._print("Connecting to MetaAPI...")
             api = MetaApi(token=cfg.metaapi_token)
             account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
 
-            print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
+            self._print(f"Account state: {account.state}, connection: {account.connection_status}")
 
             if account.state not in ("DEPLOYING", "DEPLOYED"):
                 try:
-                    print("Deploying MT5 account...", flush=True)
+                    self._print("Deploying MT5 account...")
                     await account.deploy()
-                    print("Waiting for deploy to complete...", flush=True)
+                    self._print("Waiting for deploy to complete...")
                     await account.wait_deployed(timeout_in_seconds=120)
                 except Exception as e:
-                    print(f"Deploy note: {e}", flush=True)
-                    print("Continuing — account may already be provisioned...", flush=True)
+                    self._print(f"Deploy note: {e}")
+                    self._print("Continuing — account may already be provisioned...")
 
-            print("Waiting for MT5 connection...", flush=True)
+            self._print("Waiting for MT5 connection...")
             for attempt in range(3):
                 try:
                     await account.wait_connected(timeout_in_seconds=120)
                     break
                 except Exception as e:
-                    print(f"Connection attempt {attempt+1}/3 timeout: {e}", flush=True)
+                    self._print(f"Connection attempt {attempt+1}/3 timeout: {e}")
                     if attempt < 2:
-                        print("Reloading account and retrying...", flush=True)
+                        self._print("Reloading account and retrying...")
                         account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
-                        print(f"Account state: {account.state}, connection: {account.connection_status}", flush=True)
+                        self._print(f"Account state: {account.state}, connection: {account.connection_status}")
                         if account.state not in ("DEPLOYING", "DEPLOYED"):
                             await account.deploy()
                     else:
@@ -234,21 +242,24 @@ class LiveBridge:
             connection = account.get_rpc_connection()
             await connection.connect()
             await connection.wait_synchronized(timeout_in_seconds=120)
-            print("Connected to MT5 account.\n", flush=True)
+            self._print("Connected to MT5 account.\n")
 
             executor = Executor(connection, cfg.symbol, cfg.is_live)
+
+        # Propagate per-bot print function to executor for output isolation
+        if hasattr(executor, '_print_fn') and self._print_fn:
+            executor._print_fn = self._print_fn
 
         acct_info = await executor.get_account_info()
         if acct_info:
             balance = acct_info.get("balance", 0)
-            print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}", flush=True)
+            self._print(f"Account balance: {acct_info.get('currency', 'USD')} {balance:.2f}")
             self.risk.reset_daily(balance)
-        print(flush=True)
 
         self._init_interpreter()
 
         # ── Fetch warmup bars ─────────────────────────────────────────
-        print(f"Fetching {cfg.lookback_bars} historical bars for warmup...", flush=True)
+        self._print(f"Fetching {cfg.lookback_bars} historical bars for warmup...")
         if cfg.mt5_backend == "direct":
             # Fetch candles via the executor's MT5 connection
             bars = await self._fetch_direct_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
@@ -258,7 +269,7 @@ class LiveBridge:
         else:
             bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if len(bars) < 10:
-            print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr, flush=True)
+            self._print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr)
             return
 
         for bar in bars[:-1]:
@@ -267,9 +278,9 @@ class LiveBridge:
         self._broker.pending_orders.clear()
         self._pending_signal = None
 
-        print(f"Warmup complete: {self._bar_count} bars loaded.", flush=True)
-        print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...", flush=True)
-        print(f"  Execution mode: NEXT BAR OPEN (signal queued, executed on next bar)\n", flush=True)
+        self._print(f"Warmup complete: {self._bar_count} bars loaded.")
+        self._print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...")
+        self._print(f"  Execution mode: NEXT BAR OPEN (signal queued, executed on next bar)\n")
 
         if self._register_signals:
             self._setup_signal_handlers()
@@ -292,17 +303,17 @@ class LiveBridge:
                 self._consecutive_errors += 1
                 logger.error("Error in poll cycle (%d consecutive): %s",
                              self._consecutive_errors, e, exc_info=True)
-                print(f"  [ERROR] ({self._consecutive_errors}x) {e}", flush=True)
+                self._print(f"  [ERROR] ({self._consecutive_errors}x) {e}")
 
                 # After 3 consecutive errors, try to reconnect
                 if self._consecutive_errors >= 3 and cfg.mt5_backend == "metaapi":
-                    print("  Multiple failures — attempting reconnect...", flush=True)
+                    self._print("  Multiple failures — attempting reconnect...")
                     try:
                         await self._reconnect_metaapi(cfg)
                         self._consecutive_errors = 0
-                        print("  Reconnected successfully!", flush=True)
+                        self._print("  Reconnected successfully!")
                     except Exception as re:
-                        print(f"  Reconnect failed: {re}", flush=True)
+                        self._print(f"  Reconnect failed: {re}")
                         # Wait longer before next attempt
                         await asyncio.sleep(30)
                         continue
@@ -311,7 +322,7 @@ class LiveBridge:
             self._print_heartbeat_if_due()
             await asyncio.sleep(cfg.poll_interval_seconds)
 
-        print("\nShutting down...", flush=True)
+        self._print("\nShutting down...")
         if connector:
             await connector.disconnect()
         elif self._connection:
@@ -319,7 +330,7 @@ class LiveBridge:
                 await self._connection.close()
             except Exception:
                 pass
-        print("Disconnected. Goodbye.", flush=True)
+        self._print("Disconnected. Goodbye.")
 
     async def _reconnect_metaapi(self, cfg):
         """Reconnect to MetaAPI when the account gets undeployed/disconnected."""
@@ -332,14 +343,14 @@ class LiveBridge:
             except Exception:
                 pass
 
-        print("  Reconnecting to MetaAPI...", flush=True)
+        self._print("  Reconnecting to MetaAPI...")
         api = MetaApi(token=cfg.metaapi_token)
         account = await api.metatrader_account_api.get_account(cfg.metaapi_account_id)
-        print(f"  Account state: {account.state}", flush=True)
+        self._print(f"  Account state: {account.state}")
 
         # Redeploy if needed
         if account.state not in ("DEPLOYING", "DEPLOYED"):
-            print("  Redeploying account...", flush=True)
+            self._print("  Redeploying account...")
             await account.deploy()
 
         await account.wait_connected(timeout_in_seconds=120)
@@ -352,8 +363,10 @@ class LiveBridge:
         self._account = account
         self._connection = connection
         self._executor = Executor(connection, cfg.symbol, cfg.is_live)
+        if self._print_fn:
+            self._executor._print_fn = self._print_fn
 
-        print("  Reconnected to MT5 account.", flush=True)
+        self._print("  Reconnected to MT5 account.")
 
     async def _fetch_direct_candles(self, symbol, timeframe, count):
         """Fetch candles using the direct MT5 terminal connection."""
@@ -397,8 +410,8 @@ class LiveBridge:
         hours = int(uptime.total_seconds() // 3600)
         minutes = int((uptime.total_seconds() % 3600) // 60)
         ts = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"[{ts}] HEARTBEAT | uptime: {hours}h {minutes}m | polls: {self._poll_count} | "
-              f"bars processed: {self._bar_count}", flush=True)
+        self._print(f"[{ts}] HEARTBEAT | uptime: {hours}h {minutes}m | polls: {self._poll_count} | "
+                    f"bars processed: {self._bar_count}")
 
     async def _poll_cycle(self, account, executor, cfg: LiveConfig):
         """One iteration of the main loop.
@@ -426,12 +439,12 @@ class LiveBridge:
 
         self._last_bar_time = new_bar_time
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{now}] New bar: O={latest_closed['open']:.2f} H={latest_closed['high']:.2f} "
-              f"L={latest_closed['low']:.2f} C={latest_closed['close']:.2f}", flush=True)
+        self._print(f"[{now}] New bar: O={latest_closed['open']:.2f} H={latest_closed['high']:.2f} "
+                    f"L={latest_closed['low']:.2f} C={latest_closed['close']:.2f}")
 
         # --- Step 1: Execute the PREVIOUS bar's signal at this bar's open ---
         if self._pending_signal is not None:
-            print(f"  Executing queued signal: {self._pending_signal.upper()}", flush=True)
+            self._print(f"  Executing queued signal: {self._pending_signal.upper()}")
             await self._execute_signal(self._pending_signal, executor, cfg)
             self._pending_signal = None
 
@@ -440,9 +453,9 @@ class LiveBridge:
         signal = self._detect_signal()
 
         if signal is None:
-            print("  No new signal.", flush=True)
+            self._print("  No new signal.")
         else:
-            print(f"  Signal queued for next bar: {signal.upper()}", flush=True)
+            self._print(f"  Signal queued for next bar: {signal.upper()}")
             self._pending_signal = signal
 
     async def _execute_signal(self, signal: str, executor: Executor, cfg: LiveConfig):
@@ -454,15 +467,15 @@ class LiveBridge:
             if has_position:
                 pos_type = positions[0].get("type", "")
                 if pos_type == "POSITION_TYPE_SELL":
-                    print("  Flipping: closing SHORT -> opening LONG", flush=True)
+                    self._print("  Flipping: closing SHORT -> opening LONG")
                     await executor.close_all()
                 else:
-                    print("  Already LONG, skipping entry.", flush=True)
+                    self._print("  Already LONG, skipping entry.")
                     return
 
             allowed, reason = self.risk.check_can_trade(0)
             if not allowed:
-                print(f"  Risk blocked: {reason}", flush=True)
+                self._print(f"  Risk blocked: {reason}")
                 return
 
             result = await executor.open_buy(cfg.lot_size)
@@ -473,15 +486,15 @@ class LiveBridge:
             if has_position:
                 pos_type = positions[0].get("type", "")
                 if pos_type == "POSITION_TYPE_BUY":
-                    print("  Flipping: closing LONG -> opening SHORT", flush=True)
+                    self._print("  Flipping: closing LONG -> opening SHORT")
                     await executor.close_all()
                 else:
-                    print("  Already SHORT, skipping entry.", flush=True)
+                    self._print("  Already SHORT, skipping entry.")
                     return
 
             allowed, reason = self.risk.check_can_trade(0)
             if not allowed:
-                print(f"  Risk blocked: {reason}", flush=True)
+                self._print(f"  Risk blocked: {reason}")
                 return
 
             result = await executor.open_sell(cfg.lot_size)
@@ -490,14 +503,14 @@ class LiveBridge:
 
         elif signal == "close":
             if not has_position and cfg.is_live:
-                print("  No position to close.", flush=True)
+                self._print("  No position to close.")
                 return
             await executor.close_all()
 
     def _setup_signal_handlers(self):
         """Handle Ctrl+C gracefully."""
         def _handler(signum, frame):
-            print("\n\nReceived shutdown signal...", flush=True)
+            self._print("\n\nReceived shutdown signal...")
             self._shutdown = True
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)

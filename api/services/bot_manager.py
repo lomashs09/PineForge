@@ -115,12 +115,17 @@ class BotManager:
         db_handler: BotDatabaseHandler,
     ):
         """Wrapper that runs the bridge and handles errors/cleanup."""
-        original_stdout = sys.stdout
         capture = BotPrintCapture(bot_logger)
 
+        def _bot_print(*args, **kwargs):
+            """Per-bot print replacement that routes to the bot's own logger."""
+            msg = " ".join(str(a) for a in args)
+            capture.write(msg + "\n")
+
+        # Inject per-bot print into bridge so it doesn't use global sys.stdout
+        bridge._print_fn = _bot_print
+
         try:
-            # Redirect stdout for this coroutine's print() calls
-            sys.stdout = capture
 
             # Update status to running
             async with self._session_factory() as db:
@@ -164,7 +169,6 @@ class BotManager:
                     await db.commit()
 
         finally:
-            sys.stdout = original_stdout
             await db_handler.stop()
             bot_logger.removeHandler(db_handler)
             # Keep account deployed — redeploying costs $0.13 and takes 30-60s.
