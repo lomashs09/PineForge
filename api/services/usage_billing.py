@@ -82,7 +82,12 @@ async def _billing_tick(session_factory: async_sessionmaker, bot_manager=None):
             # Calculate cost for this billing interval
             interval_hours = BILLING_INTERVAL_SECONDS / 3600
 
-            bot_cost = len(running_bots) * RATE_ACTIVE_BOT_PER_HOUR * interval_hours
+            # Only charge bots that have been running > 1 hour (first hour prepaid on start)
+            billable_bots = [
+                b for b in running_bots
+                if b.started_at and (now - b.started_at).total_seconds() > 3600
+            ]
+            bot_cost = len(billable_bots) * RATE_ACTIVE_BOT_PER_HOUR * interval_hours
             account_cost = len(active_accounts) * RATE_INACTIVE_ACCOUNT_PER_HOUR * interval_hours
             total_cost = bot_cost + account_cost
 
@@ -96,7 +101,7 @@ async def _billing_tick(session_factory: async_sessionmaker, bot_manager=None):
 
             if running_bots:
                 print(f"[UsageBilling] {user.email}: deducted ${total_cost:.4f} "
-                      f"({len(running_bots)} bots, {len(active_accounts)} accounts) "
+                      f"({len(billable_bots)}/{len(running_bots)} billable bots, {len(active_accounts)} accounts) "
                       f"balance: ${old_balance:.2f} -> ${new_balance:.2f}", flush=True)
 
             # Check if balance is too low — stop all bots

@@ -201,9 +201,9 @@ async def start_bot(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
 
-    # Charge deployment fee ($0.13) — admins exempt
+    # Charge deployment fee ($0.13) + minimum 1 hour prepaid ($0.022) — admins exempt
     if not current_user.is_admin:
-        current_user.balance = round((current_user.balance or 0) - 0.13, 4)
+        current_user.balance = round((current_user.balance or 0) - 0.152, 4)
         await db.flush()
 
     await db.refresh(bot)
