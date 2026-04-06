@@ -144,9 +144,15 @@ async def run_backtest(
 
         if use_twelvedata:
             from pineforge.data_twelvedata import download as td_download
-            logger.info("Using Twelve Data for %s %s (%s to %s)", symbol, interval, start, end)
-            data = td_download(symbol=symbol, start=start, end=end,
-                               interval=interval, api_key=settings.TWELVEDATA_API_KEY)
+            try:
+                logger.info("Using Twelve Data for %s %s (%s to %s)", symbol, interval, start, end)
+                data = td_download(symbol=symbol, start=start, end=end,
+                                   interval=interval, api_key=settings.TWELVEDATA_API_KEY)
+            except Exception as td_err:
+                # Fall back to yfinance if Twelve Data rejects the symbol (plan limits)
+                logger.warning("Twelve Data failed for %s: %s — falling back to yfinance", symbol, td_err)
+                from pineforge.data import download
+                data = download(symbol=symbol, start=start, end=end, interval=interval)
         else:
             from pineforge.data import download
             data = download(symbol=symbol, start=start, end=end, interval=interval)
