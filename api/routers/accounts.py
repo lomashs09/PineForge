@@ -89,8 +89,11 @@ async def create_account(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-    # Encrypt and store MT5 password (needed for direct mode worker login)
-    encrypted_pw = encrypt_password(body.mt5_password, settings.JWT_SECRET_KEY)
+    # Only store encrypted password in direct mode (worker needs it to login MT5)
+    # In MetaAPI mode, password is sent to MetaAPI during provisioning and not stored
+    encrypted_pw = None
+    if settings.MT5_BACKEND == "direct":
+        encrypted_pw = encrypt_password(body.mt5_password, settings.JWT_SECRET_KEY)
 
     account = BrokerAccount(
         user_id=current_user.id,
