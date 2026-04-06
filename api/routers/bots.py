@@ -173,6 +173,13 @@ async def start_bot(
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
 
+    # Check balance (minimum $5 to start, admins exempt)
+    if not current_user.is_admin and (current_user.balance or 0) < 5.0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient balance (${current_user.balance or 0:.2f}). Minimum $5.00 required to start a bot. Add funds in Billing."
+        )
+
     from ..config import get_settings as _get_settings
     settings = _get_settings()
 
@@ -192,6 +199,11 @@ async def start_bot(
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
+
+    # Charge deployment fee ($0.13) — admins exempt
+    if not current_user.is_admin:
+        current_user.balance = round((current_user.balance or 0) - 0.13, 4)
+        await db.flush()
 
     await db.refresh(bot)
     bot_manager = _get_bot_manager(request)

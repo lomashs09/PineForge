@@ -13,6 +13,7 @@ from .routers import accounts, admin, auth, billing, bots, dashboard, payments, 
 from .services.bot_manager import BotManager
 from .services.log_cleanup import log_cleanup_loop
 from .services.script_service import seed_system_scripts
+from .services.usage_billing import usage_billing_loop
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_startup_tasks())
     asyncio.create_task(bot_manager.restart_crashed_bots())
     asyncio.create_task(log_cleanup_loop(async_session))
+    asyncio.create_task(usage_billing_loop(async_session, bot_manager))
 
     yield
 

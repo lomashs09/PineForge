@@ -104,6 +104,11 @@ async def create_account(
         mt5_server=body.mt5_server,
     )
     db.add(account)
+
+    # Charge account setup fee ($3.00) — admins exempt
+    if not current_user.is_admin:
+        current_user.balance = round((current_user.balance or 0) - 3.00, 4)
+
     await db.flush()
     await db.refresh(account)
     return account
