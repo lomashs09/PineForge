@@ -436,3 +436,82 @@ async def get_bot_account_info(
         return await get_account_info(settings.METAAPI_TOKEN, account.metaapi_account_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch account info: {str(e)}")
+
+
+@router.get("/{bot_id}/history")
+async def get_bot_trade_history(
+    bot_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get real trade history from MetaAPI for this bot's symbol since bot started."""
+    result = await db.execute(
+        select(Bot)
+        .options(selectinload(Bot.broker_account))
+        .where(Bot.id == bot_id, Bot.user_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
+    if bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    from ..config import get_settings as _get_settings
+    settings = _get_settings()
+
+    if not settings.METAAPI_TOKEN or settings.MT5_BACKEND == "direct":
+        return []
+
+    account = bot.broker_account
+    if not account or not account.metaapi_account_id or account.metaapi_account_id.startswith("direct-"):
+        return []
+
+    # Get deals since bot started (or last 24h if no start time)
+    from datetime import datetime as dt, timezone as tz, timedelta
+    start = bot.started_at or (dt.now(tz.utc) - timedelta(hours=24))
+    end = dt.now(tz.utc)
+
+    try:
+        from ..services.account_service import get_history_deals
+        deals = await get_history_deals(
+            settings.METAAPI_TOKEN,
+            account.metaapi_account_id,
+            start.isoformat(),
+            end.isoformat(),
+            symbol=bot.symbol,
+        )
+
+        # Pair entry/exit deals by position ID to show complete trades
+        # Entry deals: entryType="in", profit=0
+        # Exit deals: entryType="out", profit=actual P&L
+        entries = {}  # positionId -> deal
+        trades = []
+
+        for d in deals:
+            pos_id = d.get("positionId", "")
+            entry_type = d.get("entryType", "")
+
+            if entry_type == "DEAL_ENTRY_IN":
+                entries[pos_id] = d
+            elif entry_type == "DEAL_ENTRY_OUT":
+                entry = entries.get(pos_id, {})
+                trades.append({
+                    "time": d.get("time", ""),
+                    "type": "buy" if d.get("type") == "DEAL_TYPE_BUY" else "sell",
+                    "symbol": d.get("symbol", ""),
+                    "volume": d.get("volume", 0),
+                    "entryPrice": entry.get("price", 0),
+                    "closePrice": d.get("price", 0),
+                    "profit": d.get("profit", 0),
+                    "commission": d.get("commission", 0),
+                    "swap": d.get("swap", 0),
+                    "orderId": str(d.get("orderId", "")),
+                    "positionId": str(pos_id),
+                    "dealId": str(d.get("id", "")),
+                })
+
+        # Sort by time descending
+        trades.sort(key=lambda t: t["time"], reverse=True)
+        return trades
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch trade history: {str(e)}")

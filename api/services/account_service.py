@@ -169,3 +169,52 @@ async def get_account_positions(metaapi_token: str, metaapi_account_id: str) -> 
             pass
 
     return positions or []
+
+
+async def get_history_deals(
+    metaapi_token: str,
+    metaapi_account_id: str,
+    start_time: str,
+    end_time: str,
+    symbol: str = None,
+) -> list:
+    """Get closed trade history (deals) from MetaAPI.
+
+    Returns list of deals with type, symbol, volume, price, profit, etc.
+    Entry deals have profit=0, exit deals have the actual P&L.
+    """
+    from metaapi_cloud_sdk import MetaApi
+
+    api = MetaApi(token=metaapi_token)
+    account = await api.metatrader_account_api.get_account(metaapi_account_id)
+
+    if account.state not in ("DEPLOYING", "DEPLOYED"):
+        await account.deploy()
+
+    await account.wait_connected(timeout_in_seconds=60)
+    connection = account.get_rpc_connection()
+    await connection.connect()
+
+    try:
+        await connection.wait_synchronized(timeout_in_seconds=60)
+        deals = await connection.get_deals_by_time_range(start_time, end_time)
+    finally:
+        try:
+            await connection.close()
+        except Exception:
+            pass
+
+    if not deals:
+        return []
+
+    # Filter by symbol if specified, and only real trades (not balance/commission)
+    trade_types = {"DEAL_TYPE_BUY", "DEAL_TYPE_SELL"}
+    result = []
+    for d in deals:
+        if d.get("type") not in trade_types:
+            continue
+        if symbol and d.get("symbol") != symbol:
+            continue
+        result.append(d)
+
+    return result
