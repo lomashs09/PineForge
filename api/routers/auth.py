@@ -137,6 +137,7 @@ async def get_limits(
     return {
         "plan": current_user.plan or "free",
         "is_admin": current_user.is_admin,
+        "balance": current_user.balance or 0.0,
         "bots": {"used": bot_count, "max": current_user.max_bots},
         "accounts": {"used": account_count, "max": max_accounts},
     }

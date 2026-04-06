@@ -138,10 +138,11 @@ class BotWorker:
             bot.error_message = f"Worker at capacity ({self.config.max_bots} bots)"
             return
 
-        logger.info("Starting bot %s (%s) — %s %s", bot.id, bot.name, bot.symbol, bot.timeframe)
-
         account = bot.broker_account
         script = bot.script
+        logger.info("Starting bot %s (%s) — %s %s | Account: %s@%s",
+                     bot.id, bot.name, bot.symbol, bot.timeframe,
+                     account.mt5_login, account.mt5_server)
 
         # Decrypt MT5 password
         mt5_password = ""

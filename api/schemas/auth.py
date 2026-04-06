@@ -38,6 +38,7 @@ class UserResponse(BaseModel):
     is_admin: bool
     plan: str
     max_bots: int
+    balance: float = 0.0
     created_at: datetime
 
     model_config = {"from_attributes": True}

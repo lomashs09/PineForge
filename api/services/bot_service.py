@@ -20,6 +20,10 @@ async def validate_bot_create(
     script_id: uuid.UUID,
 ) -> Optional[str]:
     """Validate bot creation constraints. Returns error string or None."""
+    # Check balance (minimum $5 to create a bot)
+    if not user.is_admin and user.balance < 5.0:
+        return f"Insufficient balance (${user.balance:.2f}). Minimum $5.00 required to create a bot. Please add funds in the Billing section."
+
     # Check bot limit
     result = await db.execute(
         select(func.count(Bot.id)).where(Bot.user_id == user.id)
