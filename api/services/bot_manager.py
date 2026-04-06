@@ -34,9 +34,9 @@ class BotManager:
         self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
         self._shutting_down = False  # Set during app shutdown to skip status updates
 
-    async def start_bot(self, bot_id: uuid.UUID) -> None:
+    async def start_bot(self, bot_id: uuid.UUID, _is_restart: bool = False) -> None:
         """Load bot config from DB and start it as an asyncio task."""
-        if bot_id in self._running_bots:
+        if bot_id in self._running_bots and not _is_restart:
             raise RuntimeError(f"Bot {bot_id} is already running")
 
         from pineforge.live.bridge import LiveBridge
@@ -273,11 +273,15 @@ class BotManager:
         print(f"[BotManager] Found {len(bots)} bots to restart", flush=True)
 
         for bot in bots:
+            if bot.id in self._running_bots:
+                print(f"[BotManager] Bot {bot.name} already running in memory, skipping", flush=True)
+                continue
+
             success = False
             for attempt in range(3):
                 try:
                     print(f"[BotManager] Restarting bot {bot.name} — attempt {attempt + 1}/3", flush=True)
-                    await self.start_bot(bot.id)
+                    await self.start_bot(bot.id, _is_restart=True)
                     print(f"[BotManager] Bot {bot.name} restarted successfully", flush=True)
                     success = True
                     break
