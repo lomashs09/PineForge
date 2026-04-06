@@ -57,7 +57,7 @@ class BotManager:
             bot = result.scalar_one_or_none()
             if bot is None:
                 raise ValueError(f"Bot {bot_id} not found")
-            if bot.status in ("running", "starting"):
+            if bot.status in ("running", "starting") and not _is_restart:
                 raise RuntimeError(f"Bot {bot_id} is already {bot.status}")
 
             account = bot.broker_account
