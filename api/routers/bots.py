@@ -41,7 +41,26 @@ async def list_bots(
     result = await db.execute(
         select(Bot).where(Bot.user_id == current_user.id).order_by(Bot.created_at.desc())
     )
-    return result.scalars().all()
+    bots = result.scalars().all()
+
+    # Compute PnL for each bot from trades
+    bot_ids = [b.id for b in bots]
+    if bot_ids:
+        pnl_result = await db.execute(
+            select(BotTrade.bot_id, func.coalesce(func.sum(BotTrade.pnl), 0.0))
+            .where(BotTrade.bot_id.in_(bot_ids), BotTrade.pnl.isnot(None))
+            .group_by(BotTrade.bot_id)
+        )
+        pnl_map = {row[0]: float(row[1]) for row in pnl_result.all()}
+    else:
+        pnl_map = {}
+
+    responses = []
+    for bot in bots:
+        data = BotResponse.model_validate(bot)
+        data.pnl = round(pnl_map.get(bot.id, 0.0), 2)
+        responses.append(data)
+    return responses
 
 
 @router.post("", response_model=BotResponse, status_code=status.HTTP_201_CREATED)
@@ -88,7 +107,14 @@ async def get_bot(
     bot = result.scalar_one_or_none()
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
-    return bot
+
+    pnl_result = await db.execute(
+        select(func.coalesce(func.sum(BotTrade.pnl), 0.0))
+        .where(BotTrade.bot_id == bot_id, BotTrade.pnl.isnot(None))
+    )
+    data = BotResponse.model_validate(bot)
+    data.pnl = round(float(pnl_result.scalar() or 0), 2)
+    return data
 
 
 @router.patch("/{bot_id}", response_model=BotResponse)
