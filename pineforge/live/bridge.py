@@ -298,7 +298,12 @@ class LiveBridge:
                 await self._poll_cycle(self._account, self._executor, cfg)
                 self._consecutive_errors = 0  # Reset on success
             except KeyboardInterrupt:
-                break
+                # Only break if running standalone (with signal handlers)
+                if self._register_signals:
+                    break
+                # Under BotManager, treat as transient error — don't exit
+                self._consecutive_errors += 1
+                continue
             except Exception as e:
                 self._consecutive_errors += 1
                 logger.error("Error in poll cycle (%d consecutive): %s",
