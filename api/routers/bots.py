@@ -487,8 +487,8 @@ async def get_bot_trade_history(
         )
 
         # Pair entry/exit deals by position ID to show complete trades
-        # Entry deals: entryType="in", profit=0
-        # Exit deals: entryType="out", profit=actual P&L
+        # Entry deals (DEAL_ENTRY_IN): profit=0, shows opening price
+        # Exit deals (DEAL_ENTRY_OUT): profit=actual P&L, shows closing price
         entries = {}  # positionId -> deal
         trades = []
 
@@ -500,9 +500,16 @@ async def get_bot_trade_history(
                 entries[pos_id] = d
             elif entry_type == "DEAL_ENTRY_OUT":
                 entry = entries.get(pos_id, {})
+                # Entry type tells the original direction:
+                # If entry was BUY and exit is SELL, it was a long trade
+                # If entry was SELL and exit is BUY, it was a short trade
+                entry_type_str = entry.get("type", "")
+                direction = "buy" if entry_type_str == "DEAL_TYPE_BUY" else "sell"
                 trades.append({
-                    "time": d.get("time", ""),
-                    "type": "buy" if d.get("type") == "DEAL_TYPE_BUY" else "sell",
+                    "time": str(d.get("time", "")),
+                    "closeTime": str(d.get("time", "")),
+                    "openTime": str(entry.get("time", "")),
+                    "type": direction,
                     "symbol": d.get("symbol", ""),
                     "volume": d.get("volume", 0),
                     "entryPrice": entry.get("price", 0),

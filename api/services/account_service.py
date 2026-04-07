@@ -207,22 +207,16 @@ async def get_history_deals(
     if not deals:
         return []
 
-    # Convert to dicts if MetaAPI returns objects
-    normalized = []
-    for d in deals:
-        if isinstance(d, dict):
-            normalized.append(d)
-        elif hasattr(d, '__dict__'):
-            normalized.append(d.__dict__)
-        else:
-            continue
+    # Response is {"deals": [...], "synchronizing": bool}
+    deal_list = deals.get("deals", []) if isinstance(deals, dict) else deals
 
     # Filter by symbol if specified, and only real trades (not balance/commission)
     trade_types = {"DEAL_TYPE_BUY", "DEAL_TYPE_SELL"}
     result = []
-    for d in normalized:
-        d_type = d.get("type", "")
-        if d_type not in trade_types:
+    for d in deal_list:
+        if not isinstance(d, dict):
+            continue
+        if d.get("type", "") not in trade_types:
             continue
         if symbol and d.get("symbol") != symbol:
             continue
