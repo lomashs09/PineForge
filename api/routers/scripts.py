@@ -6,7 +6,7 @@ from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -173,6 +173,22 @@ async def delete_script(
         raise HTTPException(status_code=403, detail="Cannot delete system scripts")
     if script.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Prevent deletion if any bots reference this script
+    from ..models.bot import Bot
+    bot_ref = await db.execute(
+        select(func.count(Bot.id)).where(
+            Bot.script_id == script_id,
+            Bot.user_id == current_user.id,
+            Bot.status.notin_(["stopped", "error"]),
+        )
+    )
+    active_count = bot_ref.scalar() or 0
+    if active_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete script: {active_count} active bot(s) are using it"
+        )
 
     await db.delete(script)
 

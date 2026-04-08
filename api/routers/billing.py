@@ -47,6 +47,12 @@ async def get_usage(
         started = bot.started_at
         stopped = bot.stopped_at
 
+        # Normalize timezone info for started_at and stopped_at
+        if started and started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        if stopped and stopped.tzinfo is None:
+            stopped = stopped.replace(tzinfo=timezone.utc)
+
         # Count deployments (starts) this period
         if started and started >= period_start:
             deployments += 1
@@ -114,12 +120,21 @@ async def get_usage(
         period_bot_hours = 0.0
         period_deployments = 0
         for bot in bots:
-            if bot.started_at and bot.started_at < inv_end:
-                s = max(bot.started_at, inv_start)
-                e = bot.stopped_at if bot.stopped_at and bot.stopped_at < inv_end else inv_end
+            started = bot.started_at
+            stopped = bot.stopped_at
+
+            # Normalize timezone info
+            if started and started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if stopped and stopped.tzinfo is None:
+                stopped = stopped.replace(tzinfo=timezone.utc)
+
+            if started and started < inv_end:
+                s = max(started, inv_start)
+                e = stopped if stopped and stopped < inv_end else inv_end
                 if e > s:
                     period_bot_hours += (e - s).total_seconds() / 3600
-                if bot.started_at >= inv_start:
+                if started >= inv_start:
                     period_deployments += 1
 
         if period_bot_hours > 0 or period_deployments > 0:

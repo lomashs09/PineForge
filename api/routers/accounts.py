@@ -51,8 +51,9 @@ async def create_account(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Check account limit (non-admin: 1 account on free plan)
-    max_accounts = 99 if current_user.is_admin else 2
+    # Check account limit based on plan
+    plan_limits = {"free": 1, "starter": 2, "pro": 5, "expert": 10}
+    max_accounts = 99 if current_user.is_admin else plan_limits.get(current_user.plan or "free", 2)
     result = await db.execute(
         select(func.count(BrokerAccount.id)).where(
             BrokerAccount.user_id == current_user.id,
@@ -127,6 +128,7 @@ async def get_account(
         select(BrokerAccount).where(
             BrokerAccount.id == account_id,
             BrokerAccount.user_id == current_user.id,
+            BrokerAccount.is_active.is_(True),
         )
     )
     account = result.scalar_one_or_none()
@@ -175,7 +177,7 @@ async def delete_account(
     bot_result = await db.execute(
         select(Bot).where(
             Bot.broker_account_id == account_id,
-            Bot.status.in_(["running", "starting"]),
+            Bot.status.in_(["running", "starting", "start_requested"]),
         )
     )
     if bot_result.scalar_one_or_none() is not None:

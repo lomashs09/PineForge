@@ -32,6 +32,7 @@ class BotManager:
         self._bot_bridges: Dict[uuid.UUID, object] = {}  # LiveBridge instances
         self._bot_loggers: Dict[uuid.UUID, BotDatabaseHandler] = {}
         self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
+        self._start_locks: Dict[uuid.UUID, asyncio.Lock] = {}
         self._shutting_down = False  # Set during app shutdown to skip status updates
 
     @property
@@ -41,6 +42,15 @@ class BotManager:
 
     async def start_bot(self, bot_id: uuid.UUID, _is_restart: bool = False) -> None:
         """Load bot config from DB and start it as an asyncio task."""
+        # Per-bot lock prevents concurrent start of the same bot
+        if bot_id not in self._start_locks:
+            self._start_locks[bot_id] = asyncio.Lock()
+
+        async with self._start_locks[bot_id]:
+            await self._start_bot_inner(bot_id, _is_restart)
+
+    async def _start_bot_inner(self, bot_id: uuid.UUID, _is_restart: bool = False) -> None:
+        """Internal bot start logic, called under per-bot lock."""
         if bot_id in self._running_bots:
             if not _is_restart:
                 raise RuntimeError(f"Bot {bot_id} is already running")
@@ -250,6 +260,7 @@ class BotManager:
             self._bot_bridges.pop(bot_id, None)
             self._bot_loggers.pop(bot_id, None)
             self._bot_account_ids.pop(bot_id, None)
+            self._start_locks.pop(bot_id, None)
 
     async def _undeploy_account(self, bot_id: uuid.UUID) -> None:
         """Undeploy the MetaAPI account so it stops consuming resources."""
