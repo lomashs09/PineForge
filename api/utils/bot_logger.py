@@ -93,7 +93,7 @@ class BotDatabaseHandler(logging.Handler):
         try:
             self._queue.put_nowait(("log", entry))
         except asyncio.QueueFull:
-            pass
+            pass  # Drop under backpressure — queue consumer will catch up
 
         # Check if this is a trade execution line and queue a trade record
         trade = self._parse_trade(message)
@@ -189,7 +189,7 @@ class BotDatabaseHandler(logging.Handler):
         if levelno >= logging.ERROR:
             return "error"
         if levelno >= logging.WARNING:
-            return "error"
+            return "warning"
         return "info"
 
     async def _consumer(self):
@@ -199,13 +199,13 @@ class BotDatabaseHandler(logging.Handler):
                 await asyncio.sleep(self._flush_interval)
                 try:
                     await self._flush_all()
-                except Exception:
-                    pass  # Never let DB errors kill the consumer
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("Bot logger DB flush failed: %s", exc)
         except asyncio.CancelledError:
             try:
                 await self._flush_all()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Bot logger DB flush failed: %s", exc)
 
     async def _flush_all(self):
         """Drain the queue and insert all pending entries."""

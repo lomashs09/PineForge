@@ -1,10 +1,11 @@
 """Admin routes — platform admin management."""
 
+import logging
 import re
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,8 @@ from ..schemas.auth import UserResponse
 from ..schemas.bot import BotResponse
 from ..schemas.script import ScriptResponse
 from ..services.script_service import validate_script
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -43,43 +46,53 @@ class AdminUserResponse(UserResponse):
 async def list_users(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     from ..models.broker_account import BrokerAccount
     from ..models.bot_trade import BotTrade
 
+    # Fetch users with pagination
     result = await db.execute(
-        select(User).order_by(User.created_at.desc())
+        select(User).order_by(User.created_at.desc()).offset(offset).limit(limit)
     )
     users = result.scalars().all()
+    user_ids = [u.id for u in users]
+
+    if not user_ids:
+        return []
+
+    # Batch: bot counts by status per user (eliminates N+1)
+    bot_counts_result = await db.execute(
+        select(Bot.user_id, Bot.status, func.count(Bot.id))
+        .where(Bot.user_id.in_(user_ids))
+        .group_by(Bot.user_id, Bot.status)
+    )
+    bot_status_map: dict = {}
+    for uid, status_val, cnt in bot_counts_result.all():
+        bot_status_map.setdefault(uid, {})[status_val] = cnt
+
+    # Batch: active account counts per user
+    acc_counts_result = await db.execute(
+        select(BrokerAccount.user_id, func.count(BrokerAccount.id))
+        .where(BrokerAccount.user_id.in_(user_ids), BrokerAccount.is_active.is_(True))
+        .group_by(BrokerAccount.user_id)
+    )
+    acc_count_map = {uid: cnt for uid, cnt in acc_counts_result.all()}
+
+    # Batch: total PnL per user
+    pnl_result = await db.execute(
+        select(Bot.user_id, func.coalesce(func.sum(BotTrade.pnl), 0.0))
+        .join(Bot, BotTrade.bot_id == Bot.id)
+        .where(Bot.user_id.in_(user_ids), BotTrade.pnl.isnot(None))
+        .group_by(Bot.user_id)
+    )
+    pnl_map = {uid: float(pnl) for uid, pnl in pnl_result.all()}
 
     response = []
     for user in users:
-        # Bot count and status breakdown
-        bot_result = await db.execute(
-            select(Bot.status, func.count(Bot.id))
-            .where(Bot.user_id == user.id)
-            .group_by(Bot.status)
-        )
-        bot_statuses = {row[0]: row[1] for row in bot_result.all()}
-        total_bots = sum(bot_statuses.values())
-
-        # Account count
-        acc_result = await db.execute(
-            select(func.count(BrokerAccount.id)).where(
-                BrokerAccount.user_id == user.id,
-                BrokerAccount.is_active == True,
-            )
-        )
-        account_count = acc_result.scalar() or 0
-
-        # Total PnL from trades
-        pnl_result = await db.execute(
-            select(func.coalesce(func.sum(BotTrade.pnl), 0.0))
-            .join(Bot, BotTrade.bot_id == Bot.id)
-            .where(Bot.user_id == user.id, BotTrade.pnl.isnot(None))
-        )
-        total_pnl = float(pnl_result.scalar() or 0)
-
+        statuses = bot_status_map.get(user.id, {})
+        total_bots = sum(statuses.values())
         response.append({
             "id": str(user.id),
             "email": user.email,
@@ -92,11 +105,11 @@ async def list_users(
             "max_bots": user.max_bots,
             "created_at": user.created_at.isoformat(),
             "bot_count": total_bots,
-            "account_count": account_count,
-            "total_pnl": round(total_pnl, 2),
-            "bots_running": bot_statuses.get("running", 0),
-            "bots_error": bot_statuses.get("error", 0),
-            "bots_stopped": bot_statuses.get("stopped", 0),
+            "account_count": acc_count_map.get(user.id, 0),
+            "total_pnl": round(pnl_map.get(user.id, 0.0), 2),
+            "bots_running": statuses.get("running", 0),
+            "bots_error": statuses.get("error", 0),
+            "bots_stopped": statuses.get("stopped", 0),
         })
 
     return response
@@ -107,12 +120,16 @@ async def list_all_bots(
     request: Request,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     from sqlalchemy.orm import selectinload
     result = await db.execute(
         select(Bot)
         .options(selectinload(Bot.user))
         .order_by(Bot.status.desc(), Bot.started_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
     bots = result.scalars().all()
 
@@ -147,12 +164,19 @@ async def update_user(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if body.max_bots is not None:
+    changes = []
+    if body.max_bots is not None and body.max_bots != user.max_bots:
+        changes.append(f"max_bots: {user.max_bots} -> {body.max_bots}")
         user.max_bots = body.max_bots
-    if body.is_active is not None:
+    if body.is_active is not None and body.is_active != user.is_active:
+        changes.append(f"is_active: {user.is_active} -> {body.is_active}")
         user.is_active = body.is_active
-    if body.is_admin is not None:
+    if body.is_admin is not None and body.is_admin != user.is_admin:
+        changes.append(f"is_admin: {user.is_admin} -> {body.is_admin}")
         user.is_admin = body.is_admin
+
+    if changes:
+        logger.info("Admin %s updated user %s: %s", admin.email, user.email, "; ".join(changes))
 
     await db.flush()
     await db.refresh(user)

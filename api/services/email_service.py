@@ -1,5 +1,6 @@
 """Email service — send transactional emails via Resend."""
 
+import logging
 import secrets
 import time
 from threading import Lock
@@ -8,10 +9,13 @@ import resend
 
 from ..config import get_settings
 
+logger = logging.getLogger(__name__)
+
 # In-memory rate limiter: {email: last_sent_timestamp}
 _send_log: dict[str, float] = {}
 _send_log_lock = Lock()
 _COOLDOWN_SECONDS = 60
+_MAX_SEND_LOG_SIZE = 10_000  # Prevent unbounded memory growth
 
 
 class EmailRateLimited(Exception):
@@ -29,6 +33,7 @@ def generate_verification_token() -> str:
 def send_verification_email(to_email: str, full_name: str, token: str) -> None:
     settings = get_settings()
     if not settings.RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured — skipping verification email to %s", to_email)
         return
 
     _enforce_rate_limit(to_email)
@@ -44,11 +49,18 @@ def send_verification_email(to_email: str, full_name: str, token: str) -> None:
             "html": _verification_html(full_name, verify_url),
         }
     )
+    logger.info("Sent verification email to %s", to_email)
 
 
 def _enforce_rate_limit(email: str) -> None:
     now = time.monotonic()
     with _send_log_lock:
+        # Periodic cleanup: evict expired entries to prevent memory leak
+        if len(_send_log) > _MAX_SEND_LOG_SIZE:
+            expired = [k for k, v in _send_log.items() if now - v >= _COOLDOWN_SECONDS]
+            for k in expired:
+                del _send_log[k]
+
         last_sent = _send_log.get(email)
         if last_sent is not None:
             elapsed = now - last_sent

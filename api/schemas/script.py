@@ -4,19 +4,19 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ScriptCreate(BaseModel):
-    name: str
-    source: str
-    description: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=200)
+    source: str = Field(..., min_length=1)
+    description: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ScriptUpdate(BaseModel):
-    name: Optional[str] = None
-    source: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    source: Optional[str] = Field(default=None, min_length=1)
+    description: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ScriptSummary(BaseModel):
@@ -38,12 +38,12 @@ class ScriptResponse(ScriptSummary):
 
 
 class BacktestRequest(BaseModel):
-    symbol: str = "XAUUSD"
-    interval: str = "1h"
+    symbol: str = Field(default="XAUUSD", min_length=1, max_length=20)
+    interval: str = Field(default="1h", min_length=1, max_length=5)
     start: str = "2025-01-06"
     end: str = "2025-12-31"
-    capital: float = 10000.0
-    quantity: Optional[float] = None
+    capital: float = Field(default=10000.0, gt=0, le=10_000_000)
+    quantity: Optional[float] = Field(default=None, gt=0, le=10_000)
 
 
 class TradeResponse(BaseModel):

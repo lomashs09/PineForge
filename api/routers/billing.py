@@ -76,7 +76,7 @@ async def get_usage(
     result = await db.execute(
         select(BrokerAccount).where(
             BrokerAccount.user_id == current_user.id,
-            BrokerAccount.is_active == True,
+            BrokerAccount.is_active.is_(True),
         )
     )
     accounts = result.scalars().all()

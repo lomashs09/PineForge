@@ -1,11 +1,15 @@
 """Async SQLAlchemy engine, session factory, and base model."""
 
+import logging
 from collections.abc import AsyncGenerator
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from .config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def asyncpg_connect_args(database_url: str) -> dict:
@@ -21,10 +25,10 @@ _engine_kwargs = {
     "echo": settings.APP_ENV == "development",
     # Neon serverless drops idle connections after ~5 minutes.
     # These settings prevent "connection is closed" errors:
-    "pool_recycle": 180,       # Recycle connections every 3 minutes
-    "pool_pre_ping": True,     # Test connection before using it
-    "pool_size": 5,            # Keep 5 connections in the pool
-    "max_overflow": 10,        # Allow 10 more under load
+    "pool_recycle": settings.DB_POOL_RECYCLE,
+    "pool_pre_ping": True,
+    "pool_size": settings.DB_POOL_SIZE,
+    "max_overflow": settings.DB_MAX_OVERFLOW,
 }
 _ca = asyncpg_connect_args(settings.DATABASE_URL)
 if _ca:
@@ -43,6 +47,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+        except SQLAlchemyError as e:
+            logger.error("Database error, rolling back: %s", e)
+            await session.rollback()
+            raise
         except Exception:
             await session.rollback()
             raise

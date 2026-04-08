@@ -18,7 +18,10 @@ EXAMPLES_DIR = Path(__file__).resolve().parent.parent.parent / "examples"
 
 _MAX_SCRIPT_SIZE = 100 * 1024  # 100KB
 _DANGEROUS_PATTERNS = re.compile(
-    r'\b(import|exec|eval|compile|__import__|__builtins__|__class__|__subclasses__)\b'
+    r'((?:^|[^a-zA-Z_])(?:import|exec|eval|compile)\s*[\(]'
+    r'|__import__|__builtins__|__class__|__subclasses__|__globals__|__code__'
+    r'|os\s*\.\s*system|subprocess|open\s*\()',
+    re.MULTILINE,
 )
 
 
@@ -122,7 +125,6 @@ async def run_backtest(
     quantity: float = None,
 ) -> dict:
     """Run a backtest using the engine. Returns BacktestResult as dict."""
-    loop = asyncio.get_event_loop()
 
     def _run():
         from pineforge.engine import Engine
@@ -157,6 +159,9 @@ async def run_backtest(
             from pineforge.data import download
             data = download(symbol=symbol, start=start, end=end, interval=interval)
 
+        if data is None or (hasattr(data, '__len__') and len(data) == 0):
+            raise ValueError(f"No data available for {symbol} ({interval}) from {start} to {end}")
+
         engine = Engine(
             initial_capital=capital, fill_on="next_open",
             interval=interval, qty_override=quantity,
@@ -167,7 +172,7 @@ async def run_backtest(
     # Each Engine.run() now creates its own ExecutionContext — safe to run in parallel
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, _run),
+            asyncio.to_thread(_run),
             timeout=120,  # 2 minute timeout for backtests
         )
     except asyncio.TimeoutError:

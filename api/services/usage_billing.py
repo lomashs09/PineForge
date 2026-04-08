@@ -32,13 +32,13 @@ async def usage_billing_loop(session_factory: async_sessionmaker, bot_manager=No
     """Background loop that deducts usage from user balances every 5 minutes."""
     # Wait for server to fully start
     await asyncio.sleep(30)
-    print("[UsageBilling] Started usage billing loop (every 5 min)", flush=True)
+    logger.info("Started usage billing loop (every 5 min)")
 
     while True:
         try:
             await _billing_tick(session_factory, bot_manager)
         except Exception as e:
-            print(f"[UsageBilling] Error: {e}", flush=True)
+            logger.warning("Error during billing tick: %s", e)
 
         await asyncio.sleep(BILLING_INTERVAL_SECONDS)
 
@@ -50,7 +50,7 @@ async def _billing_tick(session_factory: async_sessionmaker, bot_manager=None):
     async with session_factory() as db:
         # Get all users who have running bots or active accounts
         result = await db.execute(
-            select(User).where(User.is_active == True)
+            select(User).where(User.is_active.is_(True))
         )
         users = result.scalars().all()
 
@@ -71,7 +71,7 @@ async def _billing_tick(session_factory: async_sessionmaker, bot_manager=None):
             acc_result = await db.execute(
                 select(BrokerAccount).where(
                     BrokerAccount.user_id == user.id,
-                    BrokerAccount.is_active == True,
+                    BrokerAccount.is_active.is_(True),
                 )
             )
             active_accounts = acc_result.scalars().all()
@@ -94,20 +94,24 @@ async def _billing_tick(session_factory: async_sessionmaker, bot_manager=None):
             if total_cost <= 0:
                 continue
 
-            # Deduct from balance
+            # Deduct from balance (use round to avoid floating-point drift)
             old_balance = user.balance or 0.0
-            new_balance = old_balance - total_cost
-            user.balance = round(new_balance, 4)
+            new_balance = round(old_balance - total_cost, 4)
+            user.balance = new_balance
 
             if running_bots:
-                print(f"[UsageBilling] {user.email}: deducted ${total_cost:.4f} "
-                      f"({len(billable_bots)}/{len(running_bots)} billable bots, {len(active_accounts)} accounts) "
-                      f"balance: ${old_balance:.2f} -> ${new_balance:.2f}", flush=True)
+                logger.info(
+                    "%s: deducted $%.4f (%d/%d billable bots, %d accounts) balance: $%.2f -> $%.2f",
+                    user.email, total_cost, len(billable_bots), len(running_bots), len(active_accounts),
+                    old_balance, new_balance
+                )
 
             # Check if balance is too low — stop all bots
             if new_balance < LOW_BALANCE_THRESHOLD and running_bots:
-                print(f"[UsageBilling] {user.email}: balance ${new_balance:.2f} < ${LOW_BALANCE_THRESHOLD:.2f} "
-                      f"— stopping {len(running_bots)} bots", flush=True)
+                logger.info(
+                    "%s: balance $%.2f < $%.2f — stopping %d bots",
+                    user.email, new_balance, LOW_BALANCE_THRESHOLD, len(running_bots)
+                )
                 await _stop_user_bots(db, user.id, running_bots, bot_manager)
 
         await db.commit()
@@ -124,5 +128,5 @@ async def _stop_user_bots(db: AsyncSession, user_id, running_bots, bot_manager=N
         if bot_manager:
             try:
                 await bot_manager.stop_bot(bot.id)
-            except Exception:
-                pass  # Bot might not be in memory
+            except Exception as e:
+                logger.warning("Failed to stop bot %s in BotManager: %s", bot.id, e)
