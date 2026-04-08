@@ -4,54 +4,45 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class BotCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)
     broker_account_id: uuid.UUID
     script_id: uuid.UUID
-    symbol: str
-    timeframe: str
-    lot_size: float
+    symbol: str = Field(..., min_length=1, max_length=20)
+    timeframe: str = Field(..., min_length=1, max_length=10)
+    lot_size: float = Field(..., gt=0, le=100, description="Trade lot size (must be > 0)")
     is_live: bool = False
-    max_lot_size: float = 0.1
-    max_daily_loss_pct: float = 5.0
-    max_open_positions: int = 1
-    cooldown_seconds: int = 60
-    poll_interval_seconds: int = 60
-    lookback_bars: int = 200
+    max_lot_size: float = Field(default=0.1, gt=0, le=100)
+    max_daily_loss_pct: float = Field(default=5.0, gt=0, le=100)
+    max_open_positions: int = Field(default=1, ge=1, le=50)
+    cooldown_seconds: int = Field(default=60, ge=0, le=86400)
+    poll_interval_seconds: int = Field(default=60, ge=10, le=3600)
+    lookback_bars: int = Field(default=200, ge=10, le=5000)
 
-    @validator("poll_interval_seconds")
-    def poll_interval_range(cls, v):
-        if v < 10:
-            raise ValueError("Poll interval must be at least 10 seconds")
-        if v > 3600:
-            raise ValueError("Poll interval must be at most 3600 seconds")
+    @field_validator("lot_size")
+    @classmethod
+    def lot_size_lte_max(cls, v, info):
+        max_lot = info.data.get("max_lot_size", 0.1)
+        if v > max_lot:
+            raise ValueError(f"lot_size ({v}) cannot exceed max_lot_size ({max_lot})")
         return v
 
 
 class BotUpdate(BaseModel):
-    name: Optional[str] = None
-    symbol: Optional[str] = None
-    timeframe: Optional[str] = None
-    lot_size: Optional[float] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    symbol: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    timeframe: Optional[str] = Field(default=None, min_length=1, max_length=10)
+    lot_size: Optional[float] = Field(default=None, gt=0, le=100)
     is_live: Optional[bool] = None
-    max_lot_size: Optional[float] = None
-    max_daily_loss_pct: Optional[float] = None
-    max_open_positions: Optional[int] = None
-    cooldown_seconds: Optional[int] = None
-    poll_interval_seconds: Optional[int] = None
-    lookback_bars: Optional[int] = None
-
-    @validator("poll_interval_seconds")
-    def poll_interval_range(cls, v):
-        if v is not None:
-            if v < 10:
-                raise ValueError("Poll interval must be at least 10 seconds")
-            if v > 3600:
-                raise ValueError("Poll interval must be at most 3600 seconds")
-        return v
+    max_lot_size: Optional[float] = Field(default=None, gt=0, le=100)
+    max_daily_loss_pct: Optional[float] = Field(default=None, gt=0, le=100)
+    max_open_positions: Optional[int] = Field(default=None, ge=1, le=50)
+    cooldown_seconds: Optional[int] = Field(default=None, ge=0, le=86400)
+    poll_interval_seconds: Optional[int] = Field(default=None, ge=10, le=3600)
+    lookback_bars: Optional[int] = Field(default=None, ge=10, le=5000)
 
 
 class BotResponse(BaseModel):

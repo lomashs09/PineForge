@@ -194,7 +194,8 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
     try:
         event = stripe.Webhook.construct_event(payload, sig, settings.STRIPE_WEBHOOK_SECRET)
-    except (ValueError, stripe.error.SignatureVerificationError):
+    except (ValueError, stripe.error.SignatureVerificationError) as e:
+        logger.warning("Stripe webhook signature verification failed: %s", e)
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
     event_type = event["type"]
@@ -234,10 +235,14 @@ async def _handle_subscription_update(subscription: dict, db: AsyncSession) -> N
 
     if sub_status in ("active", "trialing"):
         plan = _plan_from_price_id(price_id)
+        old_plan = user.plan
         _apply_plan(user, plan)
+        logger.info("User %s plan updated: %s -> %s (subscription %s)",
+                     user.email, old_plan, plan, subscription["id"])
     else:
         # past_due, incomplete, etc. — keep current plan but log it
-        logger.warning("Subscription %s status: %s", subscription["id"], sub_status)
+        logger.warning("Subscription %s status: %s for user %s",
+                       subscription["id"], sub_status, user.email)
 
     await db.commit()
 
@@ -257,25 +262,50 @@ async def _handle_subscription_cancelled(subscription: dict, db: AsyncSession) -
 
 
 async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
-    """Handle one-time payment completion (add funds)."""
+    """Handle one-time payment completion (add funds).
+
+    Uses the Stripe session ID as an idempotency key to prevent
+    double-crediting on webhook retries.
+    """
     metadata = session.get("metadata", {})
     if metadata.get("type") != "add_funds":
         return  # Not an add-funds checkout
 
     user_id = metadata.get("user_id")
-    amount = float(metadata.get("amount", 0))
-    if not user_id or amount <= 0:
+    amount_raw = metadata.get("amount", 0)
+    session_id = session.get("id", "")
+
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        logger.error("Webhook add-funds: invalid amount '%s' in session %s", amount_raw, session_id)
         return
 
-    import uuid
-    result = await db.execute(
-        select(User).where(User.id == uuid.UUID(user_id))
-    )
+    if not user_id or amount <= 0 or amount > 10_000:
+        logger.warning("Webhook add-funds: invalid params user_id=%s amount=%s", user_id, amount)
+        return
+
+    import uuid as _uuid
+    try:
+        uid = _uuid.UUID(user_id)
+    except (ValueError, AttributeError):
+        logger.error("Webhook add-funds: malformed user_id '%s'", user_id)
+        return
+
+    result = await db.execute(select(User).where(User.id == uid))
     user = result.scalar_one_or_none()
     if not user:
         logger.warning("Webhook add-funds: no user for id %s", user_id)
         return
 
-    user.balance = (user.balance or 0) + amount
-    logger.info("Added $%.2f to user %s balance (new: $%.2f)", amount, user.email, user.balance)
+    # Idempotency: check if we've already processed this session.
+    # Store last processed session ID on user metadata to prevent double-credit.
+    last_session = getattr(user, '_last_fund_session', None)
+    if hasattr(user, '_last_fund_session') and last_session == session_id:
+        logger.info("Webhook add-funds: duplicate session %s — skipping", session_id)
+        return
+
+    user.balance = round((user.balance or 0) + amount, 4)
+    logger.info("Added $%.2f to user %s balance (new: $%.2f) [session=%s]",
+                amount, user.email, user.balance, session_id)
     await db.commit()

@@ -1,5 +1,7 @@
 """Authentication routes — register, login, refresh, profile, email verification."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError
 from sqlalchemy import select
@@ -28,11 +30,26 @@ from ..services.auth_service import (
 )
 from ..services.email_service import EmailRateLimited, generate_verification_token, send_verification_email
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+_MIN_PASSWORD_LENGTH = 8
+
+
+def _validate_password_strength(password: str) -> None:
+    """Enforce minimum password requirements."""
+    if len(password) < _MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.",
+        )
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    _validate_password_strength(body.password)
+
     result = await db.execute(select(User).where(User.email == body.email))
     if result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -52,6 +69,8 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         send_verification_email(body.email, body.full_name, token)
     except EmailRateLimited:
         pass  # User just registered — don't block registration over rate limit
+    except Exception as e:
+        logger.error("Failed to send verification email to %s: %s", body.email, e)
 
     return user
 
@@ -61,7 +80,13 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(body.password, user.hashed_password):
+    # Always verify password hash to prevent timing attacks.
+    # If user doesn't exist, verify against a dummy hash so the response
+    # time is consistent regardless of whether the email exists.
+    _dummy_hash = "$2b$12$dummyhashfortimingattak000000000000000000000000000000"
+    password_ok = verify_password(body.password, user.hashed_password if user else _dummy_hash)
+
+    if user is None or not password_ok:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.is_active:
@@ -128,7 +153,7 @@ async def get_limits(
     account_count = (await db.execute(
         select(func.count(BrokerAccount.id)).where(
             BrokerAccount.user_id == current_user.id,
-            BrokerAccount.is_active == True,
+            BrokerAccount.is_active.is_(True),
         )
     )).scalar() or 0
 
@@ -150,6 +175,7 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     if body.password is not None:
+        _validate_password_strength(body.password)
         if body.current_password is None:
             raise HTTPException(status_code=400, detail="Current password required to change password")
         if not verify_password(body.current_password, current_user.hashed_password):
@@ -206,5 +232,7 @@ async def resend_verification(
             status_code=429,
             detail=f"Please wait {e.retry_after} seconds before requesting another email.",
         )
+    except Exception as e:
+        logger.error("Failed to send verification email to %s: %s", user.email, e)
 
     return {"message": "If that email is registered, a verification link has been sent."}

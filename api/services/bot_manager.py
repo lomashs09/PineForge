@@ -34,6 +34,11 @@ class BotManager:
         self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
         self._shutting_down = False  # Set during app shutdown to skip status updates
 
+    @property
+    def running_bot_count(self) -> int:
+        """Public accessor for the number of currently running bots."""
+        return len(self._running_bots)
+
     async def start_bot(self, bot_id: uuid.UUID, _is_restart: bool = False) -> None:
         """Load bot config from DB and start it as an asyncio task."""
         if bot_id in self._running_bots:
@@ -156,22 +161,36 @@ class BotManager:
                     else:
                         # Unexpected exit (connection drop) — restart
                         retry_count += 1
-                        print(f"[BotManager] Bot {bot_id} exited unexpectedly (retry {retry_count}/{max_retries}) — restarting in 10s", flush=True)
+                        logger.info("Bot %s exited unexpectedly (retry %s/%s) — restarting in 10s", bot_id, retry_count, max_retries)
                         await asyncio.sleep(10)
 
                         # Create fresh bridge with same config
+                        old_bridge = bridge
                         bridge = LiveBridge(bridge.config)
                         bridge._register_signals = False
                         self._bot_bridges[bot_id] = bridge
+                        del old_bridge  # Help GC
 
                 except asyncio.CancelledError:
                     raise  # Propagate to outer handler
+                except (SyntaxError, NameError, AttributeError) as e:
+                    # Permanent errors — don't retry
+                    logger.error("Bot %s permanent error: %s", bot_id, e)
+                    async with self._session_factory() as db:
+                        result = await db.execute(select(Bot).where(Bot.id == bot_id))
+                        b = result.scalar_one_or_none()
+                        if b:
+                            b.status = "error"
+                            b.error_message = str(e)[:500]
+                            b.stopped_at = datetime.now(timezone.utc)
+                            await db.commit()
+                    return
                 except Exception as e:
                     err_str = str(e).lower()
                     is_permanent = any(x in err_str for x in ["script", "parse", "syntax", "not found", "not accessible"])
 
                     if is_permanent:
-                        print(f"[BotManager] Bot {bot_id} permanent error: {e}", flush=True)
+                        logger.error("Bot %s permanent error: %s", bot_id, e)
                         async with self._session_factory() as db:
                             result = await db.execute(select(Bot).where(Bot.id == bot_id))
                             b = result.scalar_one_or_none()
@@ -183,11 +202,14 @@ class BotManager:
                         return
                     else:
                         retry_count += 1
-                        print(f"[BotManager] Bot {bot_id} crashed: {e} (retry {retry_count}/{max_retries}) — restarting in 15s", flush=True)
+                        logger.error("Bot %s crashed: %s (retry %s/%s) — restarting in 15s", bot_id, e, retry_count, max_retries)
                         await asyncio.sleep(15)
+                        # Create fresh bridge with same config
+                        old_bridge = bridge
                         bridge = LiveBridge(bridge.config)
                         bridge._register_signals = False
                         self._bot_bridges[bot_id] = bridge
+                        del old_bridge  # Help GC
 
             # Exited loop
             if user_stopped:
@@ -199,7 +221,7 @@ class BotManager:
                         bot.stopped_at = datetime.now(timezone.utc)
                         await db.commit()
             elif retry_count > max_retries:
-                print(f"[BotManager] Bot {bot_id} exhausted {max_retries} retries — setting error", flush=True)
+                logger.error("Bot %s exhausted %s retries — setting error", bot_id, max_retries)
                 async with self._session_factory() as db:
                     result = await db.execute(select(Bot).where(Bot.id == bot_id))
                     bot = result.scalar_one_or_none()
@@ -285,16 +307,16 @@ class BotManager:
                     pnl = sum(p.get("profit", 0) or 0 for p in positions)
                     await executor.close_all()
                     close_result = {"positions_closed": len(positions), "pnl": round(pnl, 2)}
-                    print(f"[BotManager] Closed {len(positions)} positions for bot {bot_id} (pnl: ${pnl:.2f})", flush=True)
+                    logger.info("Closed %s positions for bot %s (pnl: $%.2f)", len(positions), bot_id, pnl)
         except Exception as e:
-            print(f"[BotManager] Failed to close positions for {bot_id}: {e}", flush=True)
+            logger.error("Failed to close positions for %s: %s", bot_id, e)
 
         # Signal graceful shutdown
         bridge._shutdown = True
 
         # Wait up to 30 seconds for graceful exit
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=30)
+            await asyncio.wait_for(task, timeout=30)
         except asyncio.TimeoutError:
             task.cancel()
             try:
@@ -334,7 +356,7 @@ class BotManager:
         """
         # Wait a bit for the server to fully start before reconnecting bots
         await asyncio.sleep(5)
-        print("[BotManager] Checking for bots to auto-restart...", flush=True)
+        logger.info("Checking for bots to auto-restart...")
 
         try:
             async with self._session_factory() as db:
@@ -343,30 +365,30 @@ class BotManager:
                 )
                 bots = result.scalars().all()
         except Exception as e:
-            print(f"[BotManager] Failed to query bots: {e}", flush=True)
+            logger.error("Failed to query bots: %s", e)
             return
 
         if not bots:
-            print("[BotManager] No bots need restarting.", flush=True)
+            logger.info("No bots need restarting.")
             return
 
-        print(f"[BotManager] Found {len(bots)} bots to restart", flush=True)
+        logger.info("Found %s bots to restart", len(bots))
 
         for bot in bots:
             if bot.id in self._running_bots:
-                print(f"[BotManager] Bot {bot.name} already running in memory, skipping", flush=True)
+                logger.info("Bot %s already running in memory, skipping", bot.name)
                 continue
 
             success = False
             for attempt in range(3):
                 try:
-                    print(f"[BotManager] Restarting bot {bot.name} — attempt {attempt + 1}/3", flush=True)
+                    logger.info("Restarting bot %s — attempt %s/3", bot.name, attempt + 1)
                     await self.start_bot(bot.id, _is_restart=True)
-                    print(f"[BotManager] Bot {bot.name} restarted successfully", flush=True)
+                    logger.info("Bot %s restarted successfully", bot.name)
                     success = True
                     break
                 except Exception as e:
-                    print(f"[BotManager] Restart attempt {attempt + 1} failed for {bot.name}: {e}", flush=True)
+                    logger.error("Restart attempt %s failed for %s: %s", attempt + 1, bot.name, e)
                     if attempt < 2:
                         await asyncio.sleep(10)  # Wait before retry
 

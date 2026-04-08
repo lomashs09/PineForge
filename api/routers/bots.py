@@ -1,5 +1,6 @@
 """Bot routes — CRUD + lifecycle management + logs + trades + stats."""
 
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -26,6 +27,8 @@ from ..schemas.bot import (
     BotUpdate,
 )
 from ..services.bot_service import get_bot_stats, validate_bot_create
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
 
@@ -134,8 +137,15 @@ async def update_bot(
     if bot.status not in ("stopped", "error"):
         raise HTTPException(status_code=400, detail="Bot must be stopped to update config")
 
+    _UPDATABLE_FIELDS = {
+        "name", "symbol", "timeframe", "lot_size", "is_live",
+        "max_lot_size", "max_daily_loss_pct", "max_open_positions",
+        "cooldown_seconds", "poll_interval_seconds", "lookback_bars",
+    }
     update_data = body.dict(exclude_unset=True)
     for key, value in update_data.items():
+        if key not in _UPDATABLE_FIELDS:
+            continue
         setattr(bot, key, value)
 
     await db.flush()
@@ -184,9 +194,20 @@ async def start_bot(
     from ..config import get_settings as _get_settings
     settings = _get_settings()
 
+    # Charge deployment fee ($0.13) + minimum 1 hour prepaid ($0.022) — admins exempt
+    # Charge BEFORE starting so we can refund on failure
+    deployment_fee = 0.152
+    if not current_user.is_admin:
+        current_user.balance = round((current_user.balance or 0) - deployment_fee, 4)
+        await db.flush()
+
     if settings.MT5_BACKEND == "direct":
         # DB-driven: set status to "start_requested", worker picks it up
         if bot.status in ("running", "starting", "start_requested"):
+            # Refund the charge
+            if not current_user.is_admin:
+                current_user.balance = round((current_user.balance or 0) + deployment_fee, 4)
+                await db.flush()
             raise HTTPException(status_code=400, detail=f"Bot is already {bot.status}")
         bot.status = "start_requested"
         bot.error_message = None
@@ -197,14 +218,17 @@ async def start_bot(
         try:
             await bot_manager.start_bot(bot_id)
         except RuntimeError as e:
+            # Refund on failure
+            if not current_user.is_admin:
+                current_user.balance = round((current_user.balance or 0) + deployment_fee, 4)
+                await db.flush()
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
+            # Refund on failure
+            if not current_user.is_admin:
+                current_user.balance = round((current_user.balance or 0) + deployment_fee, 4)
+                await db.flush()
             raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
-
-    # Charge deployment fee ($0.13) + minimum 1 hour prepaid ($0.022) — admins exempt
-    if not current_user.is_admin:
-        current_user.balance = round((current_user.balance or 0) - 0.152, 4)
-        await db.flush()
 
     await db.refresh(bot)
     bot_manager = _get_bot_manager(request)

@@ -39,7 +39,7 @@ async def get_dashboard(
     result = await db.execute(
         select(func.count(BrokerAccount.id)).where(
             BrokerAccount.user_id == current_user.id,
-            BrokerAccount.is_active == True,
+            BrokerAccount.is_active.is_(True),
         )
     )
     broker_accounts = result.scalar() or 0
@@ -56,24 +56,18 @@ async def get_dashboard(
     winning_trades = 0
 
     if user_bot_ids:
-        # Total PnL and trades
+        # Total PnL, trades, and winning trades in a single query
         result = await db.execute(
             select(
                 func.count(BotTrade.id),
                 func.coalesce(func.sum(BotTrade.pnl), 0),
+                func.count(BotTrade.id).filter(BotTrade.pnl > 0),
             ).where(BotTrade.bot_id.in_(user_bot_ids), BotTrade.pnl.isnot(None))
         )
         row = result.one()
         total_trades = row[0] or 0
         total_pnl = float(row[1] or 0)
-
-        # Winning trades
-        result = await db.execute(
-            select(func.count(BotTrade.id)).where(
-                BotTrade.bot_id.in_(user_bot_ids), BotTrade.pnl > 0
-            )
-        )
-        winning_trades = result.scalar() or 0
+        winning_trades = row[2] or 0
 
         # Today's PnL
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)

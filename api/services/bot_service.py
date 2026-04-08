@@ -37,7 +37,7 @@ async def validate_bot_create(
         select(BrokerAccount).where(
             BrokerAccount.id == broker_account_id,
             BrokerAccount.user_id == user.id,
-            BrokerAccount.is_active == True,
+            BrokerAccount.is_active.is_(True),
         )
     )
     if result.scalar_one_or_none() is None:
@@ -57,33 +57,15 @@ async def validate_bot_create(
 
 
 async def get_bot_stats(db: AsyncSession, bot_id: uuid.UUID) -> dict:
-    """Aggregate trade statistics for a bot."""
-    # Total trades
-    result = await db.execute(
-        select(func.count(BotTrade.id)).where(BotTrade.bot_id == bot_id)
-    )
-    total_trades = result.scalar() or 0
-
-    if total_trades == 0:
-        return {
-            "total_trades": 0,
-            "total_pnl": 0.0,
-            "win_rate_pct": 0.0,
-            "avg_trade_pnl": 0.0,
-            "best_trade": 0.0,
-            "worst_trade": 0.0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-        }
-
-    # Closed trades with PnL
+    """Aggregate trade statistics for a bot in a single query."""
     result = await db.execute(
         select(
             func.count(BotTrade.id),
-            func.sum(BotTrade.pnl),
+            func.coalesce(func.sum(BotTrade.pnl), 0),
             func.avg(BotTrade.pnl),
             func.max(BotTrade.pnl),
             func.min(BotTrade.pnl),
+            func.count(BotTrade.id).filter(BotTrade.pnl > 0),
         ).where(BotTrade.bot_id == bot_id, BotTrade.pnl.isnot(None))
     )
     row = result.one()
@@ -92,14 +74,13 @@ async def get_bot_stats(db: AsyncSession, bot_id: uuid.UUID) -> dict:
     avg_pnl = float(row[2] or 0)
     best = float(row[3] or 0)
     worst = float(row[4] or 0)
+    winning = row[5] or 0
 
-    # Winning trades
-    result = await db.execute(
-        select(func.count(BotTrade.id)).where(
-            BotTrade.bot_id == bot_id, BotTrade.pnl > 0
-        )
+    # Also get total trade count (including those without PnL — still open)
+    total_result = await db.execute(
+        select(func.count(BotTrade.id)).where(BotTrade.bot_id == bot_id)
     )
-    winning = result.scalar() or 0
+    total_trades = total_result.scalar() or 0
 
     win_rate = (winning / closed_count * 100) if closed_count > 0 else 0.0
 

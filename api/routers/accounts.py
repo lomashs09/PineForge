@@ -1,5 +1,6 @@
 """Broker account routes — CRUD + MetaAPI provisioning."""
 
+import logging
 from typing import List
 from uuid import UUID
 
@@ -25,6 +26,8 @@ from ..services.account_service import (
     provision_account,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 
@@ -36,7 +39,7 @@ async def list_accounts(
     result = await db.execute(
         select(BrokerAccount).where(
             BrokerAccount.user_id == current_user.id,
-            BrokerAccount.is_active == True,
+            BrokerAccount.is_active.is_(True),
         ).order_by(BrokerAccount.created_at.desc())
     )
     return result.scalars().all()
@@ -53,7 +56,7 @@ async def create_account(
     result = await db.execute(
         select(func.count(BrokerAccount.id)).where(
             BrokerAccount.user_id == current_user.id,
-            BrokerAccount.is_active == True,
+            BrokerAccount.is_active.is_(True),
         )
     )
     account_count = result.scalar()
@@ -93,7 +96,7 @@ async def create_account(
     # In MetaAPI mode, password is sent to MetaAPI during provisioning and not stored
     encrypted_pw = None
     if settings.MT5_BACKEND == "direct":
-        encrypted_pw = encrypt_password(body.mt5_password, settings.JWT_SECRET_KEY)
+        encrypted_pw = encrypt_password(body.mt5_password, settings.ENCRYPTION_KEY)
 
     account = BrokerAccount(
         user_id=current_user.id,
@@ -136,8 +139,8 @@ async def get_account(
     if settings.METAAPI_TOKEN and account.metaapi_account_id and not account.metaapi_account_id.startswith("direct-"):
         try:
             balance_info = await get_account_info(settings.METAAPI_TOKEN, account.metaapi_account_id)
-        except Exception:
-            pass  # Return account without live balance if MetaAPI fails
+        except Exception as e:
+            logger.warning("Failed to fetch live balance for account %s: %s", account.metaapi_account_id, e)
 
     return AccountDetailResponse(
         id=account.id,
@@ -180,6 +183,7 @@ async def delete_account(
 
     # Soft delete
     account.is_active = False
+    await db.flush()
 
 
 @router.get("/{account_id}/positions")
