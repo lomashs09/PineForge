@@ -43,7 +43,10 @@ async def list_bots(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Bot).where(Bot.user_id == current_user.id).order_by(Bot.created_at.desc())
+        select(Bot)
+        .options(selectinload(Bot.script))
+        .where(Bot.user_id == current_user.id)
+        .order_by(Bot.created_at.desc())
     )
     bots = result.scalars().all()
 
@@ -63,6 +66,7 @@ async def list_bots(
     for bot in bots:
         data = BotResponse.model_validate(bot)
         data.pnl = round(pnl_map.get(bot.id, 0.0), 2)
+        data.script_name = bot.script.name if bot.script else None
         responses.append(data)
     return responses
 

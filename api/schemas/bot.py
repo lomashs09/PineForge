@@ -62,6 +62,7 @@ class BotResponse(BaseModel):
     lookback_bars: int
     is_live: bool
     status: str
+    script_name: Optional[str] = None
     pnl: float = 0.0
     started_at: Optional[datetime] = None
     stopped_at: Optional[datetime] = None
