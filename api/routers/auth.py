@@ -1,10 +1,13 @@
 """Authentication routes — register, login, refresh, profile, email verification."""
 
+import html
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -37,6 +40,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _MIN_PASSWORD_LENGTH = 8
 
 
+def _normalize_email(email: str) -> str:
+    """Lowercase and strip whitespace from email for consistent lookup."""
+    return email.strip().lower()
+
+
 def _validate_password_strength(password: str) -> None:
     """Enforce minimum password requirements."""
     if len(password) < _MIN_PASSWORD_LENGTH:
@@ -50,34 +58,41 @@ def _validate_password_strength(password: str) -> None:
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     _validate_password_strength(body.password)
 
-    result = await db.execute(select(User).where(User.email == body.email))
+    normalized_email = _normalize_email(body.email)
+    result = await db.execute(select(User).where(User.email == normalized_email))
     if result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     token = generate_verification_token()
     user = User(
-        email=body.email,
+        email=normalized_email,
         hashed_password=hash_password(body.password),
-        full_name=body.full_name,
+        full_name=html.escape(body.full_name.strip()),
         email_verification_token=token,
     )
-    db.add(user)
-    await db.flush()
+    try:
+        db.add(user)
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
     await db.refresh(user)
 
     try:
-        send_verification_email(body.email, body.full_name, token)
+        send_verification_email(normalized_email, body.full_name, token)
     except EmailRateLimited:
         pass  # User just registered — don't block registration over rate limit
     except Exception as e:
-        logger.error("Failed to send verification email to %s: %s", body.email, e)
+        logger.error("Failed to send verification email to %s: %s", normalized_email, e)
 
+    logger.info("New user registered: %s", normalized_email)
     return user
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email))
+    normalized_email = _normalize_email(body.email)
+    result = await db.execute(select(User).where(User.email == normalized_email))
     user = result.scalar_one_or_none()
 
     # Always verify password hash to prevent timing attacks.
@@ -87,6 +102,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     password_ok = verify_password(body.password, user.hashed_password if user else _dummy_hash)
 
     if user is None or not password_ok:
+        logger.warning("Failed login attempt for: %s", body.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.is_active:
@@ -98,6 +114,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     settings = get_settings()
     token_data = {"sub": str(user.id), "email": user.email, "is_admin": user.is_admin}
 
+    logger.info("User logged in: %s", normalized_email)
     return TokenResponse(
         access_token=create_access_token(token_data),
         refresh_token=create_refresh_token(token_data),
@@ -183,7 +200,7 @@ async def update_me(
         current_user.hashed_password = hash_password(body.password)
 
     if body.full_name is not None:
-        current_user.full_name = body.full_name
+        current_user.full_name = html.escape(body.full_name.strip())
 
     await db.flush()
     await db.refresh(current_user)
@@ -200,13 +217,19 @@ async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_
     if user is None:
         raise HTTPException(status_code=400, detail="Invalid or expired verification token")
 
+    # Check if token is expired (24 hour window)
+    token_age = datetime.now(timezone.utc) - (user.updated_at or user.created_at)
+    if token_age.total_seconds() > 86400:  # 24 hours
+        raise HTTPException(status_code=400, detail="Verification token has expired. Please request a new one.")
+
     if user.is_email_verified:
-        return {"message": "Email already verified"}
+        return {"message": "Email verified successfully"}
 
     user.is_email_verified = True
     user.email_verification_token = None
     await db.flush()
 
+    logger.info("Email verified: %s", user.email)
     return {"message": "Email verified successfully"}
 
 
@@ -214,7 +237,8 @@ async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_
 async def resend_verification(
     body: ResendVerificationRequest, db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(select(User).where(User.email == body.email))
+    normalized_email = _normalize_email(body.email)
+    result = await db.execute(select(User).where(User.email == normalized_email))
     user = result.scalar_one_or_none()
 
     # Always return success to avoid leaking whether an email exists

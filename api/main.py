@@ -5,10 +5,12 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 from .config import get_settings
+from .middleware.rate_limit import RateLimitMiddleware
 from .database import async_session, engine
 from .routers import accounts, admin, auth, billing, bots, dashboard, payments, scripts
 from .services.bot_manager import BotManager
@@ -89,6 +91,26 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     expose_headers=["X-Request-Id"],
 )
+
+# Rate limiting on auth endpoints (login, register, resend-verification)
+app.add_middleware(RateLimitMiddleware)
+
+
+# Request body size limit (1MB) to prevent DoS via huge payloads
+MAX_BODY_SIZE = 1_048_576  # 1 MB
+
+
+@app.middleware("http")
+async def limit_request_body(request: Request, call_next):
+    """Reject requests with bodies larger than MAX_BODY_SIZE."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_SIZE:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large. Maximum size is 1MB."},
+        )
+    return await call_next(request)
+
 
 # Routers
 app.include_router(auth.router)

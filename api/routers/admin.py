@@ -164,6 +164,13 @@ async def update_user(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Prevent admin from removing their own admin status or deactivating themselves
+    if user.id == admin.id:
+        if body.is_admin is False:
+            raise HTTPException(status_code=400, detail="Cannot remove your own admin privileges")
+        if body.is_active is False:
+            raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+
     changes = []
     if body.max_bots is not None and body.max_bots != user.max_bots:
         changes.append(f"max_bots: {user.max_bots} -> {body.max_bots}")

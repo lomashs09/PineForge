@@ -184,6 +184,10 @@ async def start_bot(
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
 
+    # Re-check bot status from DB to prevent race condition
+    if bot.status in ("running", "starting", "start_requested"):
+        raise HTTPException(status_code=409, detail=f"Bot is already {bot.status}")
+
     # Check balance (minimum $5 to start, admins exempt)
     if not current_user.is_admin and (current_user.balance or 0) < 5.0:
         raise HTTPException(
@@ -196,19 +200,17 @@ async def start_bot(
 
     # Charge deployment fee ($0.13) + minimum 1 hour prepaid ($0.022) — admins exempt
     # Charge BEFORE starting so we can refund on failure
+    # Use SELECT FOR UPDATE to prevent concurrent balance race conditions
     deployment_fee = 0.152
     if not current_user.is_admin:
-        current_user.balance = round((current_user.balance or 0) - deployment_fee, 4)
+        locked_user = (await db.execute(
+            select(User).where(User.id == current_user.id).with_for_update()
+        )).scalar_one()
+        locked_user.balance = round((locked_user.balance or 0) - deployment_fee, 4)
         await db.flush()
 
     if settings.MT5_BACKEND == "direct":
         # DB-driven: set status to "start_requested", worker picks it up
-        if bot.status in ("running", "starting", "start_requested"):
-            # Refund the charge
-            if not current_user.is_admin:
-                current_user.balance = round((current_user.balance or 0) + deployment_fee, 4)
-                await db.flush()
-            raise HTTPException(status_code=400, detail=f"Bot is already {bot.status}")
         bot.status = "start_requested"
         bot.error_message = None
         await db.flush()
@@ -220,13 +222,19 @@ async def start_bot(
         except RuntimeError as e:
             # Refund on failure
             if not current_user.is_admin:
-                current_user.balance = round((current_user.balance or 0) + deployment_fee, 4)
+                locked = (await db.execute(
+                    select(User).where(User.id == current_user.id).with_for_update()
+                )).scalar_one()
+                locked.balance = round((locked.balance or 0) + deployment_fee, 4)
                 await db.flush()
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             # Refund on failure
             if not current_user.is_admin:
-                current_user.balance = round((current_user.balance or 0) + deployment_fee, 4)
+                locked = (await db.execute(
+                    select(User).where(User.id == current_user.id).with_for_update()
+                )).scalar_one()
+                locked.balance = round((locked.balance or 0) + deployment_fee, 4)
                 await db.flush()
             raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
 
@@ -524,6 +532,9 @@ async def get_bot_trade_history(
                 entries[pos_id] = d
             elif entry_type == "DEAL_ENTRY_OUT":
                 entry = entries.get(pos_id, {})
+                # Exit deal without matching entry — skip incomplete trade
+                if not entry:
+                    continue
                 # Entry type tells the original direction:
                 # If entry was BUY and exit is SELL, it was a long trade
                 # If entry was SELL and exit is BUY, it was a short trade

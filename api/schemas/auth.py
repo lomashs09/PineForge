@@ -4,13 +4,13 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
-    full_name: str
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: str = Field(..., min_length=1, max_length=200)
 
 
 class LoginRequest(BaseModel):
@@ -45,7 +45,7 @@ class UserResponse(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=1, max_length=200)
     password: Optional[str] = None
     current_password: Optional[str] = None
 
