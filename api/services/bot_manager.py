@@ -114,7 +114,14 @@ class BotManager:
         bot_logger: logging.Logger,
         db_handler: BotDatabaseHandler,
     ):
-        """Wrapper that runs the bridge and handles errors/cleanup."""
+        """Wrapper that runs the bridge with automatic restart on failure.
+
+        When the bridge exits due to connection drops or transient errors,
+        it automatically restarts (up to 10 times) with a fresh bridge.
+        Only user-initiated stops and permanent errors exit the loop.
+        """
+        from pineforge.live.bridge import LiveBridge
+
         capture = BotPrintCapture(bot_logger)
 
         def _bot_print(*args, **kwargs):
@@ -122,11 +129,11 @@ class BotManager:
             msg = " ".join(str(a) for a in args)
             capture.write(msg + "\n")
 
-        # Inject per-bot print into bridge so it doesn't use global sys.stdout
-        bridge._print_fn = _bot_print
+        max_retries = 10
+        retry_count = 0
+        user_stopped = False
 
         try:
-
             # Update status to running
             async with self._session_factory() as db:
                 result = await db.execute(select(Bot).where(Bot.id == bot_id))
@@ -135,11 +142,55 @@ class BotManager:
                     bot.status = "running"
                     await db.commit()
 
-            await bridge.run()
+            while retry_count <= max_retries and not user_stopped and not self._shutting_down:
+                # Inject per-bot print
+                bridge._print_fn = _bot_print
 
-            # Bridge exited — if _shutdown was set by user, it's a clean stop
-            # Otherwise it's an unexpected exit (connection drop) — keep as running for auto-restart
-            if bridge._shutdown:
+                try:
+                    await bridge.run()
+
+                    if bridge._shutdown:
+                        # User clicked Stop — clean exit
+                        user_stopped = True
+                        break
+                    else:
+                        # Unexpected exit (connection drop) — restart
+                        retry_count += 1
+                        print(f"[BotManager] Bot {bot_id} exited unexpectedly (retry {retry_count}/{max_retries}) — restarting in 10s", flush=True)
+                        await asyncio.sleep(10)
+
+                        # Create fresh bridge with same config
+                        bridge = LiveBridge(bridge.config)
+                        bridge._register_signals = False
+                        self._bot_bridges[bot_id] = bridge
+
+                except asyncio.CancelledError:
+                    raise  # Propagate to outer handler
+                except Exception as e:
+                    err_str = str(e).lower()
+                    is_permanent = any(x in err_str for x in ["script", "parse", "syntax", "not found", "not accessible"])
+
+                    if is_permanent:
+                        print(f"[BotManager] Bot {bot_id} permanent error: {e}", flush=True)
+                        async with self._session_factory() as db:
+                            result = await db.execute(select(Bot).where(Bot.id == bot_id))
+                            b = result.scalar_one_or_none()
+                            if b:
+                                b.status = "error"
+                                b.error_message = str(e)[:500]
+                                b.stopped_at = datetime.now(timezone.utc)
+                                await db.commit()
+                        return
+                    else:
+                        retry_count += 1
+                        print(f"[BotManager] Bot {bot_id} crashed: {e} (retry {retry_count}/{max_retries}) — restarting in 15s", flush=True)
+                        await asyncio.sleep(15)
+                        bridge = LiveBridge(bridge.config)
+                        bridge._register_signals = False
+                        self._bot_bridges[bot_id] = bridge
+
+            # Exited loop
+            if user_stopped:
                 async with self._session_factory() as db:
                     result = await db.execute(select(Bot).where(Bot.id == bot_id))
                     bot = result.scalar_one_or_none()
@@ -147,35 +198,24 @@ class BotManager:
                         bot.status = "stopped"
                         bot.stopped_at = datetime.now(timezone.utc)
                         await db.commit()
-            else:
-                # Unexpected exit — mark as running so restart_crashed_bots picks it up
-                print(f"[BotManager] Bot {bot_id} exited unexpectedly — will auto-restart", flush=True)
+            elif retry_count > max_retries:
+                print(f"[BotManager] Bot {bot_id} exhausted {max_retries} retries — setting error", flush=True)
+                async with self._session_factory() as db:
+                    result = await db.execute(select(Bot).where(Bot.id == bot_id))
+                    bot = result.scalar_one_or_none()
+                    if bot:
+                        bot.status = "error"
+                        bot.error_message = f"Connection lost after {max_retries} reconnect attempts"
+                        bot.stopped_at = datetime.now(timezone.utc)
+                        await db.commit()
 
         except asyncio.CancelledError:
-            # During server shutdown, keep status as "running" for auto-restart
             if not self._shutting_down:
                 async with self._session_factory() as db:
                     result = await db.execute(select(Bot).where(Bot.id == bot_id))
                     bot = result.scalar_one_or_none()
                     if bot:
                         bot.status = "stopped"
-                        bot.stopped_at = datetime.now(timezone.utc)
-                        await db.commit()
-
-        except Exception as e:
-            logger.error("Bot %s crashed: %s", bot_id, e, exc_info=True)
-            print(f"[BotManager] Bot {bot_id} crashed: {e} — keeping as running for auto-restart", flush=True)
-            # Keep status as running so restart_crashed_bots picks it up
-            # Only set error if it's a permanent failure (e.g. bad script)
-            err_str = str(e).lower()
-            is_permanent = any(x in err_str for x in ["script", "parse", "syntax", "not found", "not accessible"])
-            if is_permanent:
-                async with self._session_factory() as db:
-                    result = await db.execute(select(Bot).where(Bot.id == bot_id))
-                    bot = result.scalar_one_or_none()
-                    if bot:
-                        bot.status = "error"
-                        bot.error_message = str(e)[:500]
                         bot.stopped_at = datetime.now(timezone.utc)
                         await db.commit()
 
