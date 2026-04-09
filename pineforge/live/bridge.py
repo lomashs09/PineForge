@@ -49,6 +49,7 @@ class LiveBridge:
         self._start_time: datetime | None = None
         self._poll_count = 0
         self._last_heartbeat: datetime | None = None
+        self._consecutive_empty_bars = 0  # Track market-closed periods
 
         # Built-in series
         self._open_s = Series()
@@ -295,8 +296,31 @@ class LiveBridge:
 
         while not self._shutdown:
             try:
-                await self._poll_cycle(self._account, self._executor, cfg)
+                await asyncio.wait_for(
+                    self._poll_cycle(self._account, self._executor, cfg),
+                    timeout=max(cfg.poll_interval_seconds * 3, 120),  # Safety timeout
+                )
                 self._consecutive_errors = 0  # Reset on success
+            except asyncio.CancelledError:
+                # CancelledError (BaseException in Python 3.9+) can leak from
+                # MetaAPI SDK when its websocket drops.  Treat as transient —
+                # do NOT let it kill the main loop.
+                if self._shutdown:
+                    break  # Genuine shutdown requested
+                self._consecutive_errors += 1
+                logger.warning("Poll cycle cancelled (%d consecutive) — likely MetaAPI disconnect",
+                               self._consecutive_errors)
+                self._print(f"  [WARN] Connection interrupted ({self._consecutive_errors}x) — retrying...")
+                if self._consecutive_errors >= 3 and cfg.mt5_backend == "metaapi":
+                    await self._try_reconnect(cfg)
+                continue
+            except asyncio.TimeoutError:
+                self._consecutive_errors += 1
+                logger.error("Poll cycle timed out (%d consecutive)", self._consecutive_errors)
+                self._print(f"  [ERROR] Poll cycle timed out ({self._consecutive_errors}x)")
+                if self._consecutive_errors >= 3 and cfg.mt5_backend == "metaapi":
+                    await self._try_reconnect(cfg)
+                continue
             except KeyboardInterrupt:
                 # Only break if running standalone (with signal handlers)
                 if self._register_signals:
@@ -312,16 +336,7 @@ class LiveBridge:
 
                 # After 3 consecutive errors, try to reconnect
                 if self._consecutive_errors >= 3 and cfg.mt5_backend == "metaapi":
-                    self._print("  Multiple failures — attempting reconnect...")
-                    try:
-                        await self._reconnect_metaapi(cfg)
-                        self._consecutive_errors = 0
-                        self._print("  Reconnected successfully!")
-                    except Exception as re:
-                        self._print(f"  Reconnect failed: {re}")
-                        # Wait longer before next attempt
-                        await asyncio.sleep(30)
-                        continue
+                    await self._try_reconnect(cfg)
 
             self._poll_count += 1
             self._print_heartbeat_if_due()
@@ -336,6 +351,21 @@ class LiveBridge:
             except Exception:
                 pass
         self._print("Disconnected. Goodbye.")
+
+    async def _try_reconnect(self, cfg):
+        """Attempt MetaAPI reconnection with error handling."""
+        self._print("  Multiple failures — attempting reconnect...")
+        try:
+            await self._reconnect_metaapi(cfg)
+            self._consecutive_errors = 0
+            self._consecutive_empty_bars = 0
+            self._print("  Reconnected successfully!")
+        except asyncio.CancelledError:
+            self._print("  Reconnect cancelled — will retry next cycle")
+        except Exception as re:
+            self._print(f"  Reconnect failed: {re}")
+            # Wait longer before next attempt
+            await asyncio.sleep(30)
 
     async def _reconnect_metaapi(self, cfg):
         """Reconnect to MetaAPI when the account gets undeployed/disconnected."""
@@ -406,16 +436,23 @@ class LiveBridge:
         return await loop.run_in_executor(None, _get)
 
     def _print_heartbeat_if_due(self):
-        """Print a status line every hour so you can verify the server is alive."""
+        """Print a status line periodically so you can verify the server is alive.
+
+        During active trading (bars flowing): every 60 minutes.
+        During idle periods (empty bars / no new bars): every 10 minutes.
+        """
         now = datetime.now(timezone.utc)
-        if (now - self._last_heartbeat).total_seconds() < 3600:
+        # Use shorter interval when market data is absent
+        interval = 600 if self._consecutive_empty_bars > 0 else 3600
+        if (now - self._last_heartbeat).total_seconds() < interval:
             return
         self._last_heartbeat = now
         uptime = now - self._start_time
         hours = int(uptime.total_seconds() // 3600)
         minutes = int((uptime.total_seconds() % 3600) // 60)
         ts = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-        self._print(f"[{ts}] HEARTBEAT | uptime: {hours}h {minutes}m | polls: {self._poll_count} | "
+        status = "IDLE (no market data)" if self._consecutive_empty_bars > 0 else "ACTIVE"
+        self._print(f"[{ts}] HEARTBEAT [{status}] | uptime: {hours}h {minutes}m | polls: {self._poll_count} | "
                     f"bars processed: {self._bar_count}")
 
     async def _poll_cycle(self, account, executor, cfg: LiveConfig):
@@ -434,7 +471,22 @@ class LiveBridge:
         else:
             bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if not bars:
+            self._consecutive_empty_bars += 1
+            if self._consecutive_empty_bars == 1:
+                self._print("  No candle data available — market may be closed or broker disconnected.")
+                logger.warning("No candles returned for %s %s (1st empty)", cfg.symbol, cfg.timeframe)
+            elif self._consecutive_empty_bars % 10 == 0:
+                self._print(f"  Still waiting for market data ({self._consecutive_empty_bars} empty polls)...")
+                logger.warning("No candles for %s %s (%d consecutive empty polls)",
+                               cfg.symbol, cfg.timeframe, self._consecutive_empty_bars)
             return
+
+        # Got bars — reset empty counter
+        if self._consecutive_empty_bars > 0:
+            self._print(f"  Market data resumed after {self._consecutive_empty_bars} empty polls.")
+            logger.info("Candle data resumed for %s after %d empty polls",
+                        cfg.symbol, self._consecutive_empty_bars)
+            self._consecutive_empty_bars = 0
 
         if not detect_new_bar(bars, self._last_bar_time):
             return
