@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pineforge"
+version = "0.1.0"
+description = "PineForge — Pine Script v5 Strategy Backtester Engine"
+requires-python = ">=3.11"
+dependencies = ["pandas>=2.0", "yfinance>=0.2", "metaapi-cloud-sdk>=29.0", "python-dotenv>=1.0"]
+
+[project.scripts]
+pineforge = "pineforge.__main__:main"

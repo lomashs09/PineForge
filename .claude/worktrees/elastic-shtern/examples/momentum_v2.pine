@@ -1,0 +1,26 @@
+//@version=5
+strategy("Momentum ROC v2 - Wide ATR Stops", overlay=true)
+
+roc_len = input.int(20, "ROC Length")
+sma_len = input.int(50, "SMA Filter Length")
+atr_len = input.int(14, "ATR Length")
+atr_sl = input.float(3.0, "ATR SL Multiplier")
+atr_tp = input.float(4.0, "ATR TP Multiplier")
+
+momentum = ta.change(close, roc_len)
+trend_filter = ta.sma(close, sma_len)
+atr_val = ta.atr(atr_len)
+
+if momentum > 0 and close > trend_filter
+    strategy.entry("Long", strategy.long)
+    strategy.exit("XL", from_entry="Long", stop=close - atr_val * atr_sl, limit=close + atr_val * atr_tp)
+
+if momentum < 0
+    strategy.close("Long")
+
+if momentum < 0 and close < trend_filter
+    strategy.entry("Short", strategy.short)
+    strategy.exit("XS", from_entry="Short", stop=close + atr_val * atr_sl, limit=close - atr_val * atr_tp)
+
+if momentum > 0
+    strategy.close("Short")

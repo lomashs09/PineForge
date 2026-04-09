@@ -144,7 +144,7 @@ class BotManager:
             msg = " ".join(str(a) for a in args)
             capture.write(msg + "\n")
 
-        max_retries = 10
+        max_retries = 50  # Bots should survive extended outages (market close, broker maintenance)
         retry_count = 0
         user_stopped = False
 
@@ -172,6 +172,7 @@ class BotManager:
                         # Unexpected exit (connection drop) — restart
                         retry_count += 1
                         logger.info("Bot %s exited unexpectedly (retry %s/%s) — restarting in 10s", bot_id, retry_count, max_retries)
+                        _bot_print(f"  [WARN] Bot exited unexpectedly — restarting ({retry_count}/{max_retries})...")
                         await asyncio.sleep(10)
 
                         # Create fresh bridge with same config
@@ -182,7 +183,21 @@ class BotManager:
                         del old_bridge  # Help GC
 
                 except asyncio.CancelledError:
-                    raise  # Propagate to outer handler
+                    if self._shutting_down:
+                        raise  # App is shutting down — propagate
+                    # MetaAPI SDK can propagate CancelledError during connection drops.
+                    # Treat as transient — restart the bridge instead of killing the bot.
+                    retry_count += 1
+                    logger.warning("Bot %s received CancelledError (retry %s/%s) — restarting in 15s",
+                                   bot_id, retry_count, max_retries)
+                    _bot_print(f"  [WARN] Connection cancelled — restarting ({retry_count}/{max_retries})...")
+                    await asyncio.sleep(15)
+
+                    old_bridge = bridge
+                    bridge = LiveBridge(bridge.config)
+                    bridge._register_signals = False
+                    self._bot_bridges[bot_id] = bridge
+                    del old_bridge
                 except (SyntaxError, NameError, AttributeError) as e:
                     # Permanent errors — don't retry
                     logger.error("Bot %s permanent error: %s", bot_id, e)
@@ -237,7 +252,7 @@ class BotManager:
                     bot = result.scalar_one_or_none()
                     if bot:
                         bot.status = "error"
-                        bot.error_message = f"Connection lost after {max_retries} reconnect attempts"
+                        bot.error_message = f"Connection lost after {retry_count} reconnect attempts. Click Start to retry."
                         bot.stopped_at = datetime.now(timezone.utc)
                         await db.commit()
 

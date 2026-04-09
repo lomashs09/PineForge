@@ -1,0 +1,36 @@
+//@version=5
+strategy("Momentum ROC Enhanced", overlay=true)
+
+roc_len = input.int(20, "ROC Length")
+sma_len = input.int(50, "SMA Filter Length")
+atr_len = input.int(14, "ATR Length")
+rsi_len = input.int(14, "RSI Length")
+atr_sl = input.float(1.5, "ATR SL Multiplier")
+atr_tp = input.float(2.5, "ATR TP Multiplier")
+rsi_ob = input.int(70, "RSI Overbought")
+rsi_os = input.int(30, "RSI Oversold")
+vol_len = input.int(20, "Volume MA Length")
+
+momentum = ta.change(close, roc_len)
+trend_filter = ta.sma(close, sma_len)
+atr_val = ta.atr(atr_len)
+rsi_val = ta.rsi(close, rsi_len)
+avg_vol = ta.sma(volume, vol_len)
+vol_ok = volume > avg_vol
+
+long_cond = momentum > 0 and close > trend_filter and rsi_val < rsi_ob and vol_ok
+short_cond = momentum < 0 and close < trend_filter and rsi_val > rsi_os and vol_ok
+
+if long_cond
+    strategy.entry("Long", strategy.long)
+    strategy.exit("XL", from_entry="Long", stop=close - atr_val * atr_sl, limit=close + atr_val * atr_tp)
+
+if momentum < 0
+    strategy.close("Long")
+
+if short_cond
+    strategy.entry("Short", strategy.short)
+    strategy.exit("XS", from_entry="Short", stop=close + atr_val * atr_sl, limit=close - atr_val * atr_tp)
+
+if momentum > 0
+    strategy.close("Short")

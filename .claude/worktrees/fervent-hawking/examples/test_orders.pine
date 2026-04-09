@@ -1,0 +1,11 @@
+//@version=5
+strategy("Order Test", overlay=true)
+
+// Buy on every 3rd bar, close on every 5th bar
+// This generates frequent signals for testing connectivity
+
+if bar_index % 3 == 0
+    strategy.entry("TestBuy", strategy.long)
+
+if bar_index % 5 == 0
+    strategy.close("TestBuy")

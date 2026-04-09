@@ -1,0 +1,60 @@
+//@version=5
+strategy("Multi-Factor Scoring", overlay=true)
+
+// Trend factor: price vs EMAs
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+
+// Momentum factor: ROC over multiple periods
+mom_short = ta.change(close, 10)
+mom_long = ta.change(close, 30)
+
+// Volatility factor: current vs average
+vol = ta.stdev(close, 20)
+vol_avg = ta.sma(vol, 50)
+
+// RSI for overbought/oversold context
+rsi = ta.rsi(close, 14)
+
+// Score each factor (-1, 0, or +1)
+var score = 0
+
+trend_score = 0
+if close > ema20 and ema20 > ema50
+    trend_score := 2
+else if close > ema50
+    trend_score := 1
+else if close < ema20 and ema20 < ema50
+    trend_score := -2
+else
+    trend_score := -1
+
+mom_score = 0
+if mom_short > 0 and mom_long > 0
+    mom_score := 2
+else if mom_short > 0 or mom_long > 0
+    mom_score := 1
+else
+    mom_score := -1
+
+vol_score = 0
+if nz(vol, 0) < nz(vol_avg, 1) * 1.5
+    vol_score := 1
+else
+    vol_score := -1
+
+rsi_score = 0
+if rsi > 40 and rsi < 70
+    rsi_score := 1
+else if rsi < 30
+    rsi_score := 2
+else
+    rsi_score := -1
+
+score := trend_score + mom_score + vol_score + rsi_score
+
+if score >= 4
+    strategy.entry("Long", strategy.long)
+
+if score <= -1
+    strategy.close("Long")

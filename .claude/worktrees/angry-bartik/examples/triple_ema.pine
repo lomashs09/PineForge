@@ -1,0 +1,15 @@
+//@version=5
+strategy("Triple EMA", overlay=true)
+
+fast = ta.ema(close, 8)
+mid = ta.ema(close, 21)
+slow = ta.ema(close, 55)
+
+bullish = fast > mid and mid > slow
+bearish = fast < mid and mid < slow
+
+if ta.crossover(fast, mid) and mid > slow
+    strategy.entry("Long", strategy.long)
+
+if ta.crossunder(fast, mid) or bearish
+    strategy.close("Long")

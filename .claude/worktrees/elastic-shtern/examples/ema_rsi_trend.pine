@@ -1,0 +1,18 @@
+//@version=5
+strategy("EMA Trend + RSI Filter", overlay=true)
+
+ema_len = input.int(50, "EMA Length")
+rsi_len = input.int(14, "RSI Length")
+rsi_entry = input.int(40, "RSI Entry Below")
+rsi_exit = input.int(70, "RSI Exit Above")
+
+ema_val = ta.ema(close, ema_len)
+rsi_val = ta.rsi(close, rsi_len)
+
+in_uptrend = close > ema_val
+
+if in_uptrend and rsi_val < rsi_entry
+    strategy.entry("Long", strategy.long)
+
+if rsi_val > rsi_exit
+    strategy.close("Long")

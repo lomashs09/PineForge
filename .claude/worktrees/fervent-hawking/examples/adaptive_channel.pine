@@ -1,0 +1,42 @@
+//@version=5
+strategy("Adaptive Channel Breakout", overlay=true)
+
+chan_len = input.int(40, "Channel Length")
+atr_len = input.int(14, "ATR Length")
+vol_filter_len = input.int(50, "Volatility Filter Length")
+
+// Build ATR from true range
+prev_close = close[1]
+tr1 = high - low
+tr2 = math.abs(high - nz(prev_close, close))
+tr3 = math.abs(low - nz(prev_close, close))
+tr = math.max(tr1, math.max(tr2, tr3))
+atr = ta.ema(tr, atr_len)
+
+// Adaptive channel: highest/lowest adjusted by volatility regime
+hh = ta.highest(high, chan_len)
+ll = ta.lowest(low, chan_len)
+channel_mid = (hh + ll) / 2
+
+// Volatility regime filter: only trade in moderate volatility
+vol_now = ta.stdev(close, 20)
+vol_avg = ta.sma(vol_now, vol_filter_len)
+vol_ratio = nz(vol_now, 1) / nz(vol_avg, 1)
+good_vol = vol_ratio > 0.5 and vol_ratio < 2.0
+
+// Trend filter
+ema100 = ta.ema(close, 100)
+trend_up = close > ema100
+
+var in_trade = false
+
+// Enter on channel breakout with filters
+if close > hh[1] and trend_up and good_vol and not in_trade
+    strategy.entry("Long", strategy.long)
+    in_trade := true
+
+// Multi-exit: channel midpoint or volatility spike
+if in_trade
+    if close < channel_mid or vol_ratio > 3.0
+        strategy.close("Long")
+        in_trade := false
