@@ -1,0 +1,18 @@
+[Unit]
+Description=PineForge Live Trader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PineForge
+ExecStart=/home/ubuntu/PineForge/venv/bin/python3 -u -m pineforge live -s examples/momentum_v5.pine --symbol XAUUSDm --timeframe 5m --lot 0.01 --live
+Restart=always
+RestartSec=30
+EnvironmentFile=/home/ubuntu/PineForge/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

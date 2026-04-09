@@ -1,0 +1,30 @@
+//@version=5
+strategy("Momentum ROC v6 - Trend Strength", overlay=true)
+
+roc_len = input.int(20, "ROC Length")
+sma_len = input.int(50, "SMA Filter Length")
+fast_sma = input.int(20, "Fast SMA Length")
+atr_len = input.int(14, "ATR Length")
+disaster_mult = input.float(5.0, "Disaster Stop ATR Mult")
+
+momentum = ta.change(close, roc_len)
+trend_filter = ta.sma(close, sma_len)
+fast_trend = ta.sma(close, fast_sma)
+atr_val = ta.atr(atr_len)
+
+trend_strong_up = fast_trend > trend_filter
+trend_strong_down = fast_trend < trend_filter
+
+if momentum > 0 and close > trend_filter and trend_strong_up
+    strategy.entry("Long", strategy.long)
+    strategy.exit("DL", from_entry="Long", stop=close - atr_val * disaster_mult)
+
+if momentum < 0
+    strategy.close("Long")
+
+if momentum < 0 and close < trend_filter and trend_strong_down
+    strategy.entry("Short", strategy.short)
+    strategy.exit("DS", from_entry="Short", stop=close + atr_val * disaster_mult)
+
+if momentum > 0
+    strategy.close("Short")

@@ -1,0 +1,14 @@
+//@version=5
+strategy("Donchian Breakout", overlay=true)
+
+entry_len = input.int(50, "Entry Lookback")
+exit_len = input.int(25, "Exit Lookback")
+
+highest_high = ta.highest(high, entry_len)
+lowest_low = ta.lowest(low, exit_len)
+
+if close > highest_high[1]
+    strategy.entry("Long", strategy.long)
+
+if close < lowest_low[1]
+    strategy.close("Long")

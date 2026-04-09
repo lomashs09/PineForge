@@ -1,0 +1,28 @@
+//@version=5
+strategy("Trend Pullback Buyer", overlay=true)
+
+trend_ema = input.int(50, "Trend EMA")
+fast_ema = input.int(8, "Fast EMA")
+rsi_len = input.int(7, "RSI Length")
+rsi_buy = input.int(35, "RSI Buy Level")
+
+ema_trend = ta.ema(close, trend_ema)
+ema_fast = ta.ema(close, fast_ema)
+rsi = ta.rsi(close, rsi_len)
+
+// Strong uptrend: price above 50 EMA and 50 EMA rising
+trend_rising = ema_trend > ema_trend[3]
+in_uptrend = close > ema_trend and trend_rising
+
+// Pullback detected: RSI dips while fast EMA approaches trend EMA
+pullback = rsi < rsi_buy and ema_fast > ema_trend
+
+// Recovery signal: RSI turns back up from pullback
+rsi_turning_up = rsi > rsi[1] and rsi[1] < rsi_buy
+
+if in_uptrend and pullback and rsi_turning_up
+    strategy.entry("Long", strategy.long)
+
+// Exit when momentum exhausts (RSI very high) or trend breaks
+if rsi > 75 or close < ema_trend
+    strategy.close("Long")

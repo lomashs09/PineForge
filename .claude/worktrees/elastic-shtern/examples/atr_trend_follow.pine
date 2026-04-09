@@ -1,0 +1,37 @@
+//@version=5
+strategy("ATR Trend Follow + Trailing Stop", overlay=true)
+
+ema_fast = input.int(12, "Fast EMA")
+ema_slow = input.int(26, "Slow EMA")
+atr_len = input.int(14, "ATR Length")
+atr_mult = input.float(2.5, "ATR Trail Multiplier")
+
+fast = ta.ema(close, ema_fast)
+slow = ta.ema(close, ema_slow)
+
+// Compute ATR manually (true range smoothed)
+prev_close = close[1]
+tr1 = high - low
+tr2 = math.abs(high - nz(prev_close, close))
+tr3 = math.abs(low - nz(prev_close, close))
+tr = math.max(tr1, math.max(tr2, tr3))
+atr = ta.ema(tr, atr_len)
+
+var trail_stop = 0.0
+var in_trade = false
+
+if ta.crossover(fast, slow) and not in_trade
+    strategy.entry("Long", strategy.long)
+    trail_stop := close - nz(atr, 10.0) * atr_mult
+    in_trade := true
+
+// Ratchet the trailing stop upward while in trade
+if in_trade
+    new_stop = close - nz(atr, 10.0) * atr_mult
+    if new_stop > trail_stop
+        trail_stop := new_stop
+
+// Exit on trailing stop hit or trend reversal
+if in_trade and (close < trail_stop or ta.crossunder(fast, slow))
+    strategy.close("Long")
+    in_trade := false

@@ -1,0 +1,36 @@
+//@version=5
+strategy("Volatility Squeeze Breakout", overlay=true)
+
+bb_len = input.int(20, "BB Length")
+bb_mult = input.float(2.0, "BB Multiplier")
+lookback = input.int(120, "Squeeze Lookback")
+
+basis = ta.sma(close, bb_len)
+dev = ta.stdev(close, bb_len)
+bb_width = dev * bb_mult * 2
+
+// Detect squeeze: current BB width vs its own average
+avg_width = ta.sma(bb_width, lookback)
+in_squeeze = bb_width < nz(avg_width, 999) * 0.75
+
+// Track if we were recently in a squeeze
+var was_squeezed = false
+var bars_since_squeeze = 0
+
+if in_squeeze
+    was_squeezed := true
+    bars_since_squeeze := 0
+else
+    bars_since_squeeze := bars_since_squeeze + 1
+
+upper = basis + dev * bb_mult
+lower = basis - dev * bb_mult
+
+// Enter when breaking out of a squeeze
+if was_squeezed and bars_since_squeeze < 10 and close > upper
+    strategy.entry("Long", strategy.long)
+    was_squeezed := false
+
+// Exit on return to basis or opposite band
+if close < basis
+    strategy.close("Long")

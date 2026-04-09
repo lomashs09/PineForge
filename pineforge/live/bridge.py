@@ -22,6 +22,7 @@ from ..execution_context import ExecutionContext
 from .config import LiveConfig
 from .feed import fetch_candles, detect_new_bar, get_latest_closed_bar_time
 from .executor import Executor
+from .market_hours import is_market_likely_closed, get_sleep_duration_for_closed_market
 from .risk import RiskManager
 
 logger = logging.getLogger("pineforge.live.bridge")
@@ -50,6 +51,7 @@ class LiveBridge:
         self._poll_count = 0
         self._last_heartbeat: datetime | None = None
         self._consecutive_empty_bars = 0  # Track market-closed periods
+        self._market_closed_logged = False  # Avoid spamming "market closed" messages
 
         # Built-in series
         self._open_s = Series()
@@ -340,7 +342,21 @@ class LiveBridge:
 
             self._poll_count += 1
             self._print_heartbeat_if_due()
-            await asyncio.sleep(cfg.poll_interval_seconds)
+
+            # Adaptive sleep: back off during known market closure windows
+            closed, reason = is_market_likely_closed(cfg.symbol)
+            if closed:
+                if not self._market_closed_logged:
+                    self._print(f"  Market closed: {reason}. Reducing poll frequency.")
+                    self._market_closed_logged = True
+                sleep_time = get_sleep_duration_for_closed_market(cfg.symbol)
+            else:
+                if self._market_closed_logged:
+                    self._print("  Market hours resumed — normal polling.")
+                    self._market_closed_logged = False
+                sleep_time = cfg.poll_interval_seconds
+
+            await asyncio.sleep(sleep_time)
 
         self._print("\nShutting down...")
         if connector:
@@ -472,9 +488,14 @@ class LiveBridge:
             bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
         if not bars:
             self._consecutive_empty_bars += 1
+            closed, reason = is_market_likely_closed(cfg.symbol)
             if self._consecutive_empty_bars == 1:
-                self._print("  No candle data available — market may be closed or broker disconnected.")
-                logger.warning("No candles returned for %s %s (1st empty)", cfg.symbol, cfg.timeframe)
+                if closed:
+                    self._print(f"  No candle data — {reason}")
+                else:
+                    self._print("  No candle data available — market may be closed or broker disconnected.")
+                logger.warning("No candles returned for %s %s (1st empty, market_closed=%s)",
+                               cfg.symbol, cfg.timeframe, closed)
             elif self._consecutive_empty_bars % 10 == 0:
                 self._print(f"  Still waiting for market data ({self._consecutive_empty_bars} empty polls)...")
                 logger.warning("No candles for %s %s (%d consecutive empty polls)",
