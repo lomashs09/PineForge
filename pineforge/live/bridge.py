@@ -261,18 +261,10 @@ class LiveBridge:
 
         self._init_interpreter()
 
-        # ── Fetch warmup bars ─────────────────────────────────────────
-        self._print(f"Fetching {cfg.lookback_bars} historical bars for warmup...")
-        if cfg.mt5_backend == "direct":
-            # Fetch candles via the executor's MT5 connection
-            bars = await self._fetch_direct_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
-        elif connector:
-            raw = await connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
-            bars = raw
-        else:
-            bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
-        if len(bars) < 10:
-            self._print(f"Error: only got {len(bars)} bars. Check symbol/timeframe.", file=sys.stderr)
+        # ── Fetch warmup bars (with market-hours-aware retry) ─────────
+        bars = await self._fetch_warmup_bars_with_retry(cfg, account, connector)
+        if not bars or len(bars) < 10:
+            self._print(f"Insufficient warmup data ({len(bars) if bars else 0} bars). Cannot start.")
             return
 
         for bar in bars[:-1]:
@@ -367,6 +359,58 @@ class LiveBridge:
             except Exception:
                 pass
         self._print("Disconnected. Goodbye.")
+
+    async def _fetch_warmup_bars_with_retry(self, cfg, account, connector):
+        """Fetch warmup bars, waiting through market closures instead of failing.
+
+        During known market closure windows, waits and retries instead of
+        returning immediately with insufficient bars (which would cause the
+        bot manager to burn through retries).
+        """
+        max_warmup_attempts = 60  # Up to ~5 hours of waiting during weekend
+        for attempt in range(1, max_warmup_attempts + 1):
+            if self._shutdown:
+                return []
+
+            if attempt == 1:
+                self._print(f"Fetching {cfg.lookback_bars} historical bars for warmup...")
+
+            try:
+                if cfg.mt5_backend == "direct":
+                    bars = await self._fetch_direct_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+                elif connector:
+                    bars = await connector.get_candles(cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+                else:
+                    bars = await fetch_candles(account, cfg.symbol, cfg.timeframe, cfg.lookback_bars)
+            except Exception as e:
+                logger.warning("Warmup fetch attempt %d failed: %s", attempt, e)
+                bars = []
+
+            if bars and len(bars) >= 10:
+                return bars
+
+            # Not enough bars — check if market is closed
+            closed, reason = is_market_likely_closed(cfg.symbol)
+            if closed:
+                sleep_time = get_sleep_duration_for_closed_market(cfg.symbol)
+                if attempt == 1:
+                    self._print(f"  Not enough bars ({len(bars) if bars else 0}) — {reason}")
+                    self._print(f"  Waiting for market to open (checking every {sleep_time}s)...")
+                elif attempt % 10 == 0:
+                    self._print(f"  Still waiting for market data ({attempt} attempts, {reason})...")
+                await asyncio.sleep(sleep_time)
+            else:
+                # Market should be open but we got insufficient bars
+                if attempt <= 3:
+                    self._print(f"  Only got {len(bars) if bars else 0} bars (need 10+). Retrying in 30s...")
+                    await asyncio.sleep(30)
+                else:
+                    # Persistent issue during market hours — let it fail so bot manager can handle it
+                    self._print(f"  Error: only got {len(bars) if bars else 0} bars after {attempt} attempts.")
+                    return bars or []
+
+        self._print(f"  Gave up waiting for warmup bars after {max_warmup_attempts} attempts.")
+        return []
 
     async def _try_reconnect(self, cfg):
         """Attempt MetaAPI reconnection with error handling."""
