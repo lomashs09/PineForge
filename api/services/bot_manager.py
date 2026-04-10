@@ -13,6 +13,15 @@ from sqlalchemy.orm import selectinload
 
 from ..models.bot import Bot
 from ..models.broker_account import BrokerAccount
+
+# Lazy import to avoid circular deps — used in _run_bot_wrapper
+_market_hours = None
+def _get_market_hours():
+    global _market_hours
+    if _market_hours is None:
+        from pineforge.live.market_hours import is_market_likely_closed, get_sleep_duration_for_closed_market
+        _market_hours = (is_market_likely_closed, get_sleep_duration_for_closed_market)
+    return _market_hours
 from ..models.script import Script
 from ..utils.bot_logger import BotDatabaseHandler, BotPrintCapture
 
@@ -169,11 +178,19 @@ class BotManager:
                         user_stopped = True
                         break
                     else:
-                        # Unexpected exit (connection drop) — restart
-                        retry_count += 1
-                        logger.info("Bot %s exited unexpectedly (retry %s/%s) — restarting in 10s", bot_id, retry_count, max_retries)
-                        _bot_print(f"  [WARN] Bot exited unexpectedly — restarting ({retry_count}/{max_retries})...")
-                        await asyncio.sleep(10)
+                        # Check if market is closed — don't count as retry
+                        is_closed, reason = _get_market_hours()[0](bridge.config.symbol)
+                        if is_closed:
+                            sleep_time = _get_market_hours()[1](bridge.config.symbol)
+                            _bot_print(f"  Bridge exited during market closure ({reason}). Waiting {sleep_time}s...")
+                            logger.info("Bot %s exited during market closure — not counting as retry", bot_id)
+                            await asyncio.sleep(sleep_time)
+                        else:
+                            # Genuine unexpected exit during market hours
+                            retry_count += 1
+                            logger.info("Bot %s exited unexpectedly (retry %s/%s) — restarting in 10s", bot_id, retry_count, max_retries)
+                            _bot_print(f"  [WARN] Bot exited unexpectedly — restarting ({retry_count}/{max_retries})...")
+                            await asyncio.sleep(10)
 
                         # Create fresh bridge with same config
                         old_bridge = bridge
@@ -185,13 +202,18 @@ class BotManager:
                 except asyncio.CancelledError:
                     if self._shutting_down:
                         raise  # App is shutting down — propagate
-                    # MetaAPI SDK can propagate CancelledError during connection drops.
-                    # Treat as transient — restart the bridge instead of killing the bot.
-                    retry_count += 1
-                    logger.warning("Bot %s received CancelledError (retry %s/%s) — restarting in 15s",
-                                   bot_id, retry_count, max_retries)
-                    _bot_print(f"  [WARN] Connection cancelled — restarting ({retry_count}/{max_retries})...")
-                    await asyncio.sleep(15)
+                    # Check if market is closed — don't count as retry
+                    is_closed, reason = _get_market_hours()[0](bridge.config.symbol)
+                    if is_closed:
+                        sleep_time = _get_market_hours()[1](bridge.config.symbol)
+                        _bot_print(f"  Connection cancelled during market closure ({reason}). Waiting {sleep_time}s...")
+                        await asyncio.sleep(sleep_time)
+                    else:
+                        retry_count += 1
+                        logger.warning("Bot %s received CancelledError (retry %s/%s) — restarting in 15s",
+                                       bot_id, retry_count, max_retries)
+                        _bot_print(f"  [WARN] Connection cancelled — restarting ({retry_count}/{max_retries})...")
+                        await asyncio.sleep(15)
 
                     old_bridge = bridge
                     bridge = LiveBridge(bridge.config)
@@ -226,9 +248,13 @@ class BotManager:
                                 await db.commit()
                         return
                     else:
-                        retry_count += 1
-                        logger.error("Bot %s crashed: %s (retry %s/%s) — restarting in 15s", bot_id, e, retry_count, max_retries)
-                        await asyncio.sleep(15)
+                        is_closed, _ = _get_market_hours()[0](bridge.config.symbol)
+                        if not is_closed:
+                            retry_count += 1
+                        sleep_time = _get_market_hours()[1](bridge.config.symbol) if is_closed else 15
+                        logger.error("Bot %s crashed: %s (retry %s/%s, market_closed=%s) — restarting in %ds",
+                                     bot_id, e, retry_count, max_retries, is_closed, sleep_time)
+                        await asyncio.sleep(sleep_time)
                         # Create fresh bridge with same config
                         old_bridge = bridge
                         bridge = LiveBridge(bridge.config)
