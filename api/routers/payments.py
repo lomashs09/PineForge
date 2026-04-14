@@ -201,7 +201,7 @@ async def razorpay_create_order(
     order = client.order.create({
         "amount": amount_paise,
         "currency": "INR",
-        "receipt": f"pf_{current_user.id}_{int(datetime.now(timezone.utc).timestamp())}",
+        "receipt": f"pf_{int(datetime.now(timezone.utc).timestamp())}",
         "notes": {
             "user_id": str(current_user.id),
             "type": "add_funds",
