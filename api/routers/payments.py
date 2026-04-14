@@ -126,8 +126,8 @@ async def add_funds(
     settings = get_settings()
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
-    if body.amount < 10:
-        raise HTTPException(status_code=400, detail="Minimum top-up amount is $10.00")
+    if body.amount < 1:
+        raise HTTPException(status_code=400, detail="Minimum top-up amount is $1.00")
     if body.amount > 1000:
         raise HTTPException(status_code=400, detail="Maximum top-up amount is $1,000.00")
 
