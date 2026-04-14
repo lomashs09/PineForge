@@ -175,7 +175,8 @@ async def add_funds(
 
 
 class RazorpayOrderRequest(BaseModel):
-    amount: float  # INR amount
+    amount: float
+    currency: str = "INR"  # INR or USD
 
 
 @router.post("/razorpay/create-order")
@@ -189,23 +190,29 @@ async def razorpay_create_order(
     if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=500, detail="Razorpay not configured")
 
+    currency = body.currency.upper()
+    if currency not in ("INR", "USD"):
+        raise HTTPException(status_code=400, detail="Currency must be INR or USD")
+
     if body.amount < 1:
-        raise HTTPException(status_code=400, detail="Minimum top-up is ₹1")
-    if body.amount > 100000:
-        raise HTTPException(status_code=400, detail="Maximum top-up is ₹1,00,000")
+        raise HTTPException(status_code=400, detail=f"Minimum top-up is {'₹' if currency == 'INR' else '$'}1")
+    max_amount = 100000 if currency == "INR" else 1000
+    if body.amount > max_amount:
+        raise HTTPException(status_code=400, detail=f"Maximum top-up is {'₹1,00,000' if currency == 'INR' else '$1,000'}")
 
     import razorpay
     client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
-    amount_paise = int(body.amount * 100)
+    amount_smallest = int(body.amount * 100)  # paise for INR, cents for USD
     order = client.order.create({
-        "amount": amount_paise,
-        "currency": "INR",
+        "amount": amount_smallest,
+        "currency": currency,
         "receipt": f"pf_{int(datetime.now(timezone.utc).timestamp())}",
         "notes": {
             "user_id": str(current_user.id),
             "type": "add_funds",
-            "amount_inr": str(body.amount),
+            "amount": str(body.amount),
+            "currency": currency,
         },
     })
 
