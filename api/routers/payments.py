@@ -1,6 +1,7 @@
-"""Stripe payments — checkout sessions, webhooks, and billing portal."""
+"""Payments — Stripe & Razorpay checkout, webhooks, and billing portal."""
 
 import logging
+from datetime import datetime, timezone
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -168,6 +169,99 @@ async def add_funds(
     )
 
     return {"checkout_url": session.url}
+
+
+# ── Razorpay Add Funds ───────────────────────────────────────────
+
+
+class RazorpayOrderRequest(BaseModel):
+    amount: float  # INR amount
+
+
+@router.post("/razorpay/create-order")
+async def razorpay_create_order(
+    body: RazorpayOrderRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a Razorpay order for adding funds."""
+    settings = get_settings()
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=500, detail="Razorpay not configured")
+
+    if body.amount < 1:
+        raise HTTPException(status_code=400, detail="Minimum top-up is ₹1")
+    if body.amount > 100000:
+        raise HTTPException(status_code=400, detail="Maximum top-up is ₹1,00,000")
+
+    import razorpay
+    client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+    amount_paise = int(body.amount * 100)
+    order = client.order.create({
+        "amount": amount_paise,
+        "currency": "INR",
+        "receipt": f"pf_{current_user.id}_{int(datetime.now(timezone.utc).timestamp())}",
+        "notes": {
+            "user_id": str(current_user.id),
+            "type": "add_funds",
+            "amount_inr": str(body.amount),
+        },
+    })
+
+    return {
+        "order_id": order["id"],
+        "amount": amount_paise,
+        "currency": "INR",
+        "key_id": settings.RAZORPAY_KEY_ID,
+        "user_email": current_user.email,
+        "user_name": current_user.full_name,
+    }
+
+
+class RazorpayVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    amount: float  # INR amount to credit
+
+
+@router.post("/razorpay/verify")
+async def razorpay_verify_payment(
+    body: RazorpayVerifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify Razorpay payment and credit user balance."""
+    settings = get_settings()
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=500, detail="Razorpay not configured")
+
+    import razorpay
+    client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+    # Verify signature
+    try:
+        client.utility.verify_payment_signature({
+            "razorpay_order_id": body.razorpay_order_id,
+            "razorpay_payment_id": body.razorpay_payment_id,
+            "razorpay_signature": body.razorpay_signature,
+        })
+    except razorpay.errors.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Payment verification failed")
+
+    # Credit balance
+    current_user.balance = round((current_user.balance or 0) + body.amount, 4)
+    await db.flush()
+
+    logger.info("Razorpay: Added ₹%.2f to %s balance (new: ₹%.2f) [payment=%s]",
+                body.amount, current_user.email, current_user.balance, body.razorpay_payment_id)
+
+    return {
+        "success": True,
+        "balance": current_user.balance,
+        "payment_id": body.razorpay_payment_id,
+    }
 
 
 # ── Billing Portal ────────────────────────────────────────────────

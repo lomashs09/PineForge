@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     STRIPE_PRICE_EXPERT_MONTHLY: str = ""
     STRIPE_PRICE_EXPERT_ANNUAL: str = ""
 
+    # Razorpay
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+
     # Data providers
     TWELVEDATA_API_KEY: str = ""  # Free tier: 800 credits/day, 1+ year intraday history
 
