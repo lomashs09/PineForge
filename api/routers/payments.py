@@ -218,8 +218,8 @@ async def razorpay_create_order(
 
     return {
         "order_id": order["id"],
-        "amount": amount_paise,
-        "currency": "INR",
+        "amount": amount_smallest,
+        "currency": currency,
         "key_id": settings.RAZORPAY_KEY_ID,
         "user_email": current_user.email,
         "user_name": current_user.full_name,
