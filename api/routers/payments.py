@@ -148,16 +148,16 @@ async def add_funds(
             current_user.stripe_customer_id = customer_id
             await db.flush()
 
-    amount_cents = int(body.amount * 100)
+    amount_paise = int(body.amount * 100)  # INR uses paise (1 INR = 100 paise)
     session = stripe.checkout.Session.create(
         customer=customer_id,
         mode="payment",
         line_items=[{
             "price_data": {
-                "currency": "usd",
-                "unit_amount": amount_cents,
+                "currency": "inr",
+                "unit_amount": amount_paise,
                 "product_data": {
-                    "name": f"PineForge Balance Top-Up (${body.amount:.2f})",
+                    "name": f"PineForge Balance Top-Up",
                 },
             },
             "quantity": 1,
