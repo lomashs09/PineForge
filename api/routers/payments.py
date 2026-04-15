@@ -230,7 +230,8 @@ class RazorpayVerifyRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
-    amount: float  # INR amount to credit
+    amount: float  # paid amount in original currency
+    currency: str = "INR"  # INR or USD
 
 
 @router.post("/razorpay/verify")
@@ -239,7 +240,7 @@ async def razorpay_verify_payment(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify Razorpay payment and credit user balance."""
+    """Verify Razorpay payment and credit user balance (always in USD)."""
     settings = get_settings()
     if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
         raise HTTPException(status_code=500, detail="Razorpay not configured")
@@ -247,7 +248,6 @@ async def razorpay_verify_payment(
     import razorpay
     client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
-    # Verify signature
     try:
         client.utility.verify_payment_signature({
             "razorpay_order_id": body.razorpay_order_id,
@@ -257,17 +257,66 @@ async def razorpay_verify_payment(
     except razorpay.errors.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Payment verification failed")
 
-    # Credit balance
-    current_user.balance = round((current_user.balance or 0) + body.amount, 4)
+    # Convert to USD if paid in INR (wallet balance is always in USD)
+    currency = body.currency.upper()
+    if currency == "INR":
+        rate = await _get_inr_to_usd_rate()
+        usd_credited = round(body.amount * rate, 4)
+    else:
+        usd_credited = round(body.amount, 4)
+
+    current_user.balance = round((current_user.balance or 0) + usd_credited, 4)
     await db.flush()
 
-    logger.info("Razorpay: Added ₹%.2f to %s balance (new: ₹%.2f) [payment=%s]",
-                body.amount, current_user.email, current_user.balance, body.razorpay_payment_id)
+    logger.info("Razorpay: Paid %s%.2f → credited $%.4f to %s (balance: $%.2f) [payment=%s]",
+                '₹' if currency == 'INR' else '$', body.amount, usd_credited,
+                current_user.email, current_user.balance, body.razorpay_payment_id)
 
     return {
         "success": True,
         "balance": current_user.balance,
+        "credited_usd": usd_credited,
+        "paid_amount": body.amount,
+        "paid_currency": currency,
         "payment_id": body.razorpay_payment_id,
+    }
+
+
+# ── FX Rate ──────────────────────────────────────────────────────
+
+_fx_cache = {"usd_per_inr": None, "fetched_at": 0}
+
+
+async def _get_inr_to_usd_rate() -> float:
+    """Get current INR→USD conversion rate, cached for 1 hour."""
+    import time
+    import httpx
+    now = time.time()
+    if _fx_cache["usd_per_inr"] and (now - _fx_cache["fetched_at"]) < 3600:
+        return _fx_cache["usd_per_inr"]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://open.er-api.com/v6/latest/INR")
+            resp.raise_for_status()
+            data = resp.json()
+            rate = float(data["rates"]["USD"])
+            _fx_cache["usd_per_inr"] = rate
+            _fx_cache["fetched_at"] = now
+            return rate
+    except Exception as e:
+        logger.warning("FX rate fetch failed: %s — using fallback", e)
+        return _fx_cache["usd_per_inr"] or 0.012  # ~83 INR per USD fallback
+
+
+@router.get("/fx-rate")
+async def get_fx_rate(current_user: User = Depends(get_current_user)):
+    """Get current INR→USD conversion rate."""
+    rate = await _get_inr_to_usd_rate()
+    return {
+        "inr_to_usd": rate,
+        "usd_to_inr": round(1 / rate, 2) if rate else 0,
+        "source": "open.er-api.com",
     }
 
 
