@@ -115,7 +115,8 @@ async def create_checkout_session(
 
 
 class AddFundsRequest(BaseModel):
-    amount: float  # USD amount to add (minimum $10)
+    amount: float
+    currency: str = "INR"  # INR (via Stripe domestic) or USD
 
 
 @router.post("/add-funds")
@@ -127,15 +128,25 @@ async def add_funds(
     settings = get_settings()
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
+    currency = body.currency.upper()
+    if currency not in ("INR", "USD"):
+        raise HTTPException(status_code=400, detail="Currency must be INR or USD")
     if body.amount < 1:
-        raise HTTPException(status_code=400, detail="Minimum top-up amount is $1.00")
-    if body.amount > 1000:
-        raise HTTPException(status_code=400, detail="Maximum top-up amount is $1,000.00")
+        raise HTTPException(status_code=400, detail=f"Minimum top-up is {'₹' if currency == 'INR' else '$'}1")
+    max_amount = 100000 if currency == "INR" else 1000
+    if body.amount > max_amount:
+        raise HTTPException(status_code=400, detail=f"Maximum top-up is {'₹1,00,000' if currency == 'INR' else '$1,000'}")
+
+    # Compute USD credit amount (wallet balance is always USD)
+    if currency == "INR":
+        rate = await _get_inr_to_usd_rate()
+        usd_credit = round(body.amount * rate, 4)
+    else:
+        usd_credit = round(body.amount, 4)
 
     # Reuse existing Stripe customer or create one
     customer_id = current_user.stripe_customer_id
     if not customer_id:
-        # Re-check after potential concurrent request
         await db.refresh(current_user)
         if current_user.stripe_customer_id:
             customer_id = current_user.stripe_customer_id
@@ -149,26 +160,32 @@ async def add_funds(
             current_user.stripe_customer_id = customer_id
             await db.flush()
 
-    amount_paise = int(body.amount * 100)  # INR uses paise (1 INR = 100 paise)
+    amount_smallest = int(body.amount * 100)
     session = stripe.checkout.Session.create(
         customer=customer_id,
         mode="payment",
         line_items=[{
             "price_data": {
-                "currency": "inr",
-                "unit_amount": amount_paise,
+                "currency": currency.lower(),
+                "unit_amount": amount_smallest,
                 "product_data": {
-                    "name": f"PineForge Balance Top-Up",
+                    "name": f"PineForge Balance Top-Up (${usd_credit:.2f})",
                 },
             },
             "quantity": 1,
         }],
         success_url=f"{settings.FRONTEND_URL}/billing?funded=1",
         cancel_url=f"{settings.FRONTEND_URL}/billing",
-        metadata={"user_id": str(current_user.id), "type": "add_funds", "amount": str(body.amount)},
+        metadata={
+            "user_id": str(current_user.id),
+            "type": "add_funds",
+            "amount": str(body.amount),
+            "currency": currency,
+            "usd_credit": str(usd_credit),
+        },
     )
 
-    return {"checkout_url": session.url}
+    return {"checkout_url": session.url, "usd_credit": usd_credit}
 
 
 # ── Razorpay Add Funds ───────────────────────────────────────────
@@ -571,16 +588,19 @@ async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
 
     user_id = metadata.get("user_id")
     amount_raw = metadata.get("amount", 0)
+    paid_currency = metadata.get("currency", "USD").upper()
+    usd_credit_raw = metadata.get("usd_credit", amount_raw)
     session_id = session.get("id", "")
 
     try:
-        amount = float(amount_raw)
+        paid_amount = float(amount_raw)
+        usd_credit = float(usd_credit_raw)
     except (TypeError, ValueError):
         logger.error("Webhook add-funds: invalid amount '%s' in session %s", amount_raw, session_id)
         return
 
-    if not user_id or amount <= 0 or amount > 10_000:
-        logger.warning("Webhook add-funds: invalid params user_id=%s amount=%s", user_id, amount)
+    if not user_id or usd_credit <= 0 or usd_credit > 10_000:
+        logger.warning("Webhook add-funds: invalid params user_id=%s usd_credit=%s", user_id, usd_credit)
         return
 
     import uuid as _uuid
@@ -596,16 +616,8 @@ async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
         logger.warning("Webhook add-funds: no user for id %s", user_id)
         return
 
-    # Idempotency: Stripe sends webhooks with unique session IDs.
-    # Check if this session was already processed by seeing if payment_intent matches.
-    # Use Stripe's built-in idempotency — if session status is already "complete"
-    # and balance was already credited, the amount_total will match.
-    # For now, log the session_id for audit trail (Stripe itself won't send
-    # the same event twice in the same delivery, but retries can happen).
-    logger.info("Processing add-funds session %s for user %s (amount=$%.2f)",
-                session_id, user.email, amount)
-
-    user.balance = round((user.balance or 0) + amount, 4)
-    logger.info("Added $%.2f to user %s balance (new: $%.2f) [session=%s]",
-                amount, user.email, user.balance, session_id)
+    user.balance = round((user.balance or 0) + usd_credit, 4)
+    logger.info("Added $%.4f to %s balance (paid %s%.2f, new: $%.2f) [session=%s]",
+                usd_credit, user.email, '₹' if paid_currency == 'INR' else '$',
+                paid_amount, user.balance, session_id)
     await db.commit()
