@@ -271,6 +271,139 @@ async def razorpay_verify_payment(
     }
 
 
+# ── PayPal Add Funds ─────────────────────────────────────────────
+
+
+def _paypal_base_url():
+    settings = get_settings()
+    return "https://api-m.sandbox.paypal.com" if settings.PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com"
+
+
+async def _paypal_get_token():
+    """Get OAuth2 access token from PayPal."""
+    settings = get_settings()
+    if not settings.PAYPAL_CLIENT_ID or not settings.PAYPAL_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="PayPal not configured")
+
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_paypal_base_url()}/v1/oauth2/token",
+            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={"grant_type": "client_credentials"},
+        )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+class PayPalOrderRequest(BaseModel):
+    amount: float  # USD amount
+
+
+@router.post("/paypal/create-order")
+async def paypal_create_order(
+    body: PayPalOrderRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a PayPal order for adding funds (USD only)."""
+    if body.amount < 1:
+        raise HTTPException(status_code=400, detail="Minimum top-up is $1.00")
+    if body.amount > 1000:
+        raise HTTPException(status_code=400, detail="Maximum top-up is $1,000.00")
+
+    import httpx
+    token = await _paypal_get_token()
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_paypal_base_url()}/v2/checkout/orders",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "intent": "CAPTURE",
+                "purchase_units": [{
+                    "reference_id": f"pf_{int(datetime.now(timezone.utc).timestamp())}",
+                    "description": "PineForge Balance Top-Up",
+                    "amount": {
+                        "currency_code": "USD",
+                        "value": f"{body.amount:.2f}",
+                    },
+                    "custom_id": str(current_user.id),
+                }],
+            },
+        )
+
+    if resp.status_code >= 400:
+        logger.error("PayPal create order failed: %s", resp.text)
+        raise HTTPException(status_code=400, detail=f"PayPal error: {resp.text[:200]}")
+
+    order = resp.json()
+    return {
+        "order_id": order["id"],
+        "client_id": get_settings().PAYPAL_CLIENT_ID,
+    }
+
+
+class PayPalCaptureRequest(BaseModel):
+    order_id: str
+    amount: float  # Expected USD amount
+
+
+@router.post("/paypal/capture")
+async def paypal_capture(
+    body: PayPalCaptureRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Capture an approved PayPal order and credit user balance."""
+    import httpx
+    token = await _paypal_get_token()
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_paypal_base_url()}/v2/checkout/orders/{body.order_id}/capture",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={},
+        )
+
+    if resp.status_code >= 400:
+        logger.error("PayPal capture failed: %s", resp.text)
+        raise HTTPException(status_code=400, detail=f"PayPal capture failed: {resp.text[:200]}")
+
+    capture = resp.json()
+    if capture.get("status") != "COMPLETED":
+        raise HTTPException(status_code=400, detail=f"Payment not completed: {capture.get('status')}")
+
+    # Verify amount matches
+    pu = capture.get("purchase_units", [{}])[0]
+    captures = pu.get("payments", {}).get("captures", [{}])
+    captured_amount = float(captures[0].get("amount", {}).get("value", 0))
+    captured_currency = captures[0].get("amount", {}).get("currency_code", "")
+
+    if captured_currency != "USD" or abs(captured_amount - body.amount) > 0.01:
+        raise HTTPException(status_code=400, detail="Payment amount mismatch")
+
+    # Credit balance
+    current_user.balance = round((current_user.balance or 0) + captured_amount, 4)
+    await db.flush()
+
+    logger.info("PayPal: Added $%.2f to %s balance (new: $%.2f) [order=%s]",
+                captured_amount, current_user.email, current_user.balance, body.order_id)
+
+    return {
+        "success": True,
+        "balance": current_user.balance,
+        "order_id": body.order_id,
+    }
+
+
 # ── Billing Portal ────────────────────────────────────────────────
 
 

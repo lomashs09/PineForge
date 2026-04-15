@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
 
+    # PayPal
+    PAYPAL_CLIENT_ID: str = ""
+    PAYPAL_CLIENT_SECRET: str = ""
+    PAYPAL_MODE: str = "live"  # "live" or "sandbox"
+
     # Data providers
     TWELVEDATA_API_KEY: str = ""  # Free tier: 800 credits/day, 1+ year intraday history
 
