@@ -134,14 +134,14 @@ async def run_backtest(
         settings = get_settings()
 
         # Fetch warmup data BEFORE start date so indicators are warm at start.
-        # 200 bars = ~8 days for 1h, ~4 months for 1d, ~14h for 1m.
+        # 200 bars warmup for indicator stability.
         WARMUP_BARS = 200
         interval_minutes = {
             "1m": 1, "5m": 5, "15m": 15, "30m": 30,
             "1h": 60, "4h": 240, "1d": 1440,
         }.get(interval, 60)
-        # Add buffer (2x for weekends/holidays on 24/7 data, 4x for forex weekly gaps)
-        warmup_days = max(1, (WARMUP_BARS * interval_minutes * 4) // 1440)
+        # Forex/gold trades ~5 days/week, so multiply by 1.5 for weekend gaps
+        warmup_days = max(1, int((WARMUP_BARS * interval_minutes * 1.5) // 1440) + 1)
         fetch_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=warmup_days)).strftime("%Y-%m-%d")
 
         # Use Twelve Data for intraday intervals when date range exceeds yfinance limits
@@ -153,20 +153,30 @@ async def run_backtest(
             if fetch_start < earliest_yf:
                 use_twelvedata = True
 
-        if use_twelvedata:
-            from pineforge.data_twelvedata import download as td_download
-            try:
-                logger.info("Using Twelve Data for %s %s (%s to %s, warmup from %s)",
-                            symbol, interval, start, end, fetch_start)
-                data = td_download(symbol=symbol, start=fetch_start, end=end,
-                                   interval=interval, api_key=settings.TWELVEDATA_API_KEY)
-            except Exception as td_err:
-                logger.warning("Twelve Data failed for %s: %s — falling back to yfinance", symbol, td_err)
-                from pineforge.data import download
-                data = download(symbol=symbol, start=fetch_start, end=end, interval=interval)
-        else:
+        def _fetch(fetch_start_date: str):
+            if use_twelvedata:
+                from pineforge.data_twelvedata import download as td_download
+                try:
+                    return td_download(symbol=symbol, start=fetch_start_date, end=end,
+                                       interval=interval, api_key=settings.TWELVEDATA_API_KEY)
+                except Exception as td_err:
+                    logger.warning("Twelve Data failed for %s: %s — falling back to yfinance", symbol, td_err)
             from pineforge.data import download
-            data = download(symbol=symbol, start=fetch_start, end=end, interval=interval)
+            return download(symbol=symbol, start=fetch_start_date, end=end, interval=interval)
+
+        # Try with warmup first; fall back to no-warmup if it fails
+        try:
+            logger.info("Fetching %s %s with warmup from %s (start=%s, end=%s)",
+                        symbol, interval, fetch_start, start, end)
+            data = _fetch(fetch_start)
+        except Exception as e:
+            logger.warning("Warmup fetch failed (%s) — retrying without warmup", e)
+            data = _fetch(start)
+
+        if data is None or (hasattr(data, '__len__') and len(data) == 0):
+            # Final fallback: try without warmup
+            logger.warning("Empty data with warmup, retrying without warmup")
+            data = _fetch(start)
 
         if data is None or (hasattr(data, '__len__') and len(data) == 0):
             raise ValueError(f"No data available for {symbol} ({interval}) from {start} to {end}")
