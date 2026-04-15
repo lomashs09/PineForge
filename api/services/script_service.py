@@ -129,35 +129,44 @@ async def run_backtest(
     def _run():
         from pineforge.engine import Engine
         from ..config import get_settings
+        from datetime import datetime, timedelta
 
         settings = get_settings()
 
+        # Fetch warmup data BEFORE start date so indicators are warm at start.
+        # 200 bars = ~8 days for 1h, ~4 months for 1d, ~14h for 1m.
+        WARMUP_BARS = 200
+        interval_minutes = {
+            "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+            "1h": 60, "4h": 240, "1d": 1440,
+        }.get(interval, 60)
+        # Add buffer (2x for weekends/holidays on 24/7 data, 4x for forex weekly gaps)
+        warmup_days = max(1, (WARMUP_BARS * interval_minutes * 4) // 1440)
+        fetch_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+
         # Use Twelve Data for intraday intervals when date range exceeds yfinance limits
-        # yfinance: 5m/15m = 60 days, 1m = 7 days
-        # Twelve Data: 1+ year for all intervals
         use_twelvedata = False
         if interval in ("1m", "5m", "15m") and settings.TWELVEDATA_API_KEY:
-            from datetime import datetime, timedelta
             yf_limits = {"1m": 7, "5m": 60, "15m": 60}
             max_days = yf_limits.get(interval, 60)
             earliest_yf = (datetime.now() - timedelta(days=max_days)).strftime("%Y-%m-%d")
-            if start < earliest_yf:
+            if fetch_start < earliest_yf:
                 use_twelvedata = True
 
         if use_twelvedata:
             from pineforge.data_twelvedata import download as td_download
             try:
-                logger.info("Using Twelve Data for %s %s (%s to %s)", symbol, interval, start, end)
-                data = td_download(symbol=symbol, start=start, end=end,
+                logger.info("Using Twelve Data for %s %s (%s to %s, warmup from %s)",
+                            symbol, interval, start, end, fetch_start)
+                data = td_download(symbol=symbol, start=fetch_start, end=end,
                                    interval=interval, api_key=settings.TWELVEDATA_API_KEY)
             except Exception as td_err:
-                # Fall back to yfinance if Twelve Data rejects the symbol (plan limits)
                 logger.warning("Twelve Data failed for %s: %s — falling back to yfinance", symbol, td_err)
                 from pineforge.data import download
-                data = download(symbol=symbol, start=start, end=end, interval=interval)
+                data = download(symbol=symbol, start=fetch_start, end=end, interval=interval)
         else:
             from pineforge.data import download
-            data = download(symbol=symbol, start=start, end=end, interval=interval)
+            data = download(symbol=symbol, start=fetch_start, end=end, interval=interval)
 
         if data is None or (hasattr(data, '__len__') and len(data) == 0):
             raise ValueError(f"No data available for {symbol} ({interval}) from {start} to {end}")
@@ -178,8 +187,22 @@ async def run_backtest(
     except asyncio.TimeoutError:
         raise Exception("Backtest timed out after 2 minutes. Try a shorter date range or simpler script.")
 
-    trades = []
+    # Filter trades to only those whose entry is within [start, end]
+    # (warmup trades before start date are excluded from reported results)
+    filtered_trades = []
     for t in result.trades:
+        entry_date_str = str(t.entry_date) if t.entry_date else ""
+        if entry_date_str and entry_date_str[:10] < start:
+            continue  # warmup trade, skip
+        filtered_trades.append(t)
+
+    trades = []
+    net_profit = 0.0
+    winners = 0
+    losers = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    for t in filtered_trades:
         pnl_pct = (t.pnl / capital * 100) if capital else 0.0
         trades.append({
             "direction": t.direction,
@@ -190,20 +213,33 @@ async def run_backtest(
             "entry_date": str(t.entry_date) if t.entry_date else None,
             "exit_date": str(t.exit_date) if t.exit_date else None,
         })
+        net_profit += t.pnl
+        if t.pnl > 0:
+            winners += 1
+            gross_profit += t.pnl
+        elif t.pnl < 0:
+            losers += 1
+            gross_loss += t.pnl
+
+    total_trades = len(filtered_trades)
+    win_rate = (winners / total_trades * 100) if total_trades else 0.0
+    profit_factor = (gross_profit / abs(gross_loss)) if gross_loss != 0 else (float("inf") if gross_profit > 0 else 0.0)
+    total_return_pct = (net_profit / capital * 100) if capital else 0.0
+    avg_trade = net_profit / total_trades if total_trades else 0.0
 
     return {
         "strategy_name": result.strategy_name,
-        "total_return_pct": round(result.total_return_pct, 2),
-        "total_trades": result.total_trades,
-        "win_rate_pct": round(result.win_rate, 2),
-        "profit_factor": round(result.profit_factor, 2),
+        "total_return_pct": round(total_return_pct, 2),
+        "total_trades": total_trades,
+        "win_rate_pct": round(win_rate, 2),
+        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else 999.0,
         "max_drawdown_pct": round(result.max_drawdown_pct, 2),
         "sharpe_ratio": round(result.sharpe_ratio, 2),
-        "net_profit": round(result.net_profit, 2),
-        "initial_capital": result.initial_capital,
-        "final_equity": round(result.final_equity, 2),
-        "winning_trades": result.winning_trades,
-        "losing_trades": result.losing_trades,
-        "avg_trade_pnl": round(result.avg_trade_pnl, 2),
+        "net_profit": round(net_profit, 2),
+        "initial_capital": capital,
+        "final_equity": round(capital + net_profit, 2),
+        "winning_trades": winners,
+        "losing_trades": losers,
+        "avg_trade_pnl": round(avg_trade, 2),
         "trades": trades,
     }
