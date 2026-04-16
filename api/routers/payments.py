@@ -510,6 +510,9 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
     event_type = event["type"]
     data = event["data"]["object"]
+    # Stripe SDK returns StripeObject, not plain dict — convert so .get() works
+    if hasattr(data, "to_dict"):
+        data = data.to_dict()
 
     if event_type in (
         "customer.subscription.created",
