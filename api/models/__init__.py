@@ -6,5 +6,6 @@ from .script import Script
 from .bot import Bot
 from .bot_log import BotLog
 from .bot_trade import BotTrade
+from .transaction import Transaction
 
-__all__ = ["User", "BrokerAccount", "Script", "Bot", "BotLog", "BotTrade"]
+__all__ = ["User", "BrokerAccount", "Script", "Bot", "BotLog", "BotTrade", "Transaction"]

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 from ..models.bot import Bot
 from ..models.broker_account import BrokerAccount
 from ..models.user import User
+from .transaction_service import record_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,15 @@ async def _billing_tick(session_factory: async_sessionmaker, bot_manager=None):
             old_balance = user.balance or 0.0
             new_balance = round(old_balance - total_cost, 4)
             user.balance = new_balance
+
+            # Build description with breakdown
+            parts = []
+            if billable_bots:
+                parts.append(f"{len(billable_bots)} bot{'s' if len(billable_bots) > 1 else ''} ${bot_cost:.4f}")
+            if active_accounts:
+                parts.append(f"{len(active_accounts)} acct{'s' if len(active_accounts) > 1 else ''} ${account_cost:.4f}")
+            desc = f"Usage billing ({', '.join(parts)})"
+            await record_transaction(db, user, "charge", -total_cost, desc)
 
             if running_bots:
                 logger.info(

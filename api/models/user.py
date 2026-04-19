@@ -45,3 +45,4 @@ class User(Base):
     broker_accounts = relationship("BrokerAccount", back_populates="user", cascade="all, delete-orphan")
     scripts = relationship("Script", back_populates="user", cascade="all, delete-orphan")
     bots = relationship("Bot", back_populates="user", cascade="all, delete-orphan")
+    transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")

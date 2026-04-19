@@ -13,6 +13,7 @@ from ..config import get_settings
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
+from ..services.transaction_service import record_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,11 @@ async def razorpay_verify_payment(
         usd_credited = round(body.amount, 4)
 
     current_user.balance = round((current_user.balance or 0) + usd_credited, 4)
+    await record_transaction(
+        db, current_user, "deposit", usd_credited,
+        f"Razorpay {'₹' if currency == 'INR' else '$'}{body.amount:.2f} → ${usd_credited:.4f}",
+        reference_id=body.razorpay_payment_id,
+    )
     await db.flush()
 
     logger.info("Razorpay: Paid %s%.2f → credited $%.4f to %s (balance: $%.2f) [payment=%s]",
@@ -458,6 +464,11 @@ async def paypal_capture(
 
     # Credit balance
     current_user.balance = round((current_user.balance or 0) + captured_amount, 4)
+    await record_transaction(
+        db, current_user, "deposit", captured_amount,
+        f"PayPal ${captured_amount:.2f}",
+        reference_id=body.order_id,
+    )
     await db.flush()
 
     logger.info("PayPal: Added $%.2f to %s balance (new: $%.2f) [order=%s]",
@@ -620,7 +631,13 @@ async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
         return
 
     user.balance = round((user.balance or 0) + usd_credit, 4)
+    currency_sym = '₹' if paid_currency == 'INR' else '$'
+    await record_transaction(
+        db, user, "deposit", usd_credit,
+        f"Stripe {currency_sym}{paid_amount:.2f} → ${usd_credit:.4f}",
+        reference_id=session_id,
+    )
     logger.info("Added $%.4f to %s balance (paid %s%.2f, new: $%.2f) [session=%s]",
-                usd_credit, user.email, '₹' if paid_currency == 'INR' else '$',
+                usd_credit, user.email, currency_sym,
                 paid_amount, user.balance, session_id)
     await db.commit()

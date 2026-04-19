@@ -16,6 +16,7 @@ from ..models.bot import Bot
 from ..models.bot_log import BotLog
 from ..models.bot_trade import BotTrade
 from ..models.user import User
+from ..services.transaction_service import record_transaction
 from ..schemas.bot import (
     BotCreate,
     BotLogResponse,
@@ -211,6 +212,11 @@ async def start_bot(
             select(User).where(User.id == current_user.id).with_for_update()
         )).scalar_one()
         locked_user.balance = round((locked_user.balance or 0) - deployment_fee, 4)
+        await record_transaction(
+            db, locked_user, "charge", -deployment_fee,
+            f"Bot start: {bot.name} ({bot.symbol} {bot.timeframe}) — deploy + 1hr prepaid",
+            reference_id=str(bot.id),
+        )
         await db.flush()
 
     if settings.MT5_BACKEND == "direct":
@@ -230,6 +236,11 @@ async def start_bot(
                     select(User).where(User.id == current_user.id).with_for_update()
                 )).scalar_one()
                 locked.balance = round((locked.balance or 0) + deployment_fee, 4)
+                await record_transaction(
+                    db, locked, "refund", deployment_fee,
+                    f"Bot start failed (refund): {bot.name} — {e}",
+                    reference_id=str(bot.id),
+                )
                 await db.flush()
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
@@ -239,6 +250,11 @@ async def start_bot(
                     select(User).where(User.id == current_user.id).with_for_update()
                 )).scalar_one()
                 locked.balance = round((locked.balance or 0) + deployment_fee, 4)
+                await record_transaction(
+                    db, locked, "refund", deployment_fee,
+                    f"Bot start failed (refund): {bot.name} — {e}",
+                    reference_id=str(bot.id),
+                )
                 await db.flush()
             raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
 

@@ -14,6 +14,7 @@ from ..middleware.auth import get_current_user
 from ..models.broker_account import BrokerAccount
 from ..models.bot import Bot
 from ..models.user import User
+from ..services.transaction_service import record_transaction
 from ..schemas.broker_account import (
     AccountDetailResponse,
     AccountProvisionRequest,
@@ -112,6 +113,11 @@ async def create_account(
     # Charge account setup fee ($3.00) — admins exempt
     if not current_user.is_admin:
         current_user.balance = round((current_user.balance or 0) - 3.00, 4)
+        await record_transaction(
+            db, current_user, "charge", -3.00,
+            f"MT5 account setup: {body.label} ({body.mt5_login}@{body.mt5_server})",
+            reference_id=None,
+        )
 
     await db.flush()
     await db.refresh(account)

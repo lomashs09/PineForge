@@ -1,8 +1,9 @@
-"""Billing routes — usage tracking and invoice history."""
+"""Billing routes — usage tracking, transaction history, and invoice history."""
 
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +12,7 @@ from ..middleware.auth import get_current_user
 from ..models.bot import Bot
 from ..models.bot_log import BotLog
 from ..models.broker_account import BrokerAccount
+from ..models.transaction import Transaction
 from ..models.user import User
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -162,4 +164,47 @@ async def get_usage(
         "active_bots": active_bots,
         "active_accounts": active_accounts,
         "invoices": invoices,
+    }
+
+
+@router.get("/transactions")
+async def get_transactions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    tx_type: Optional[str] = Query(None, alias="type"),
+):
+    """Get paginated transaction history for the authenticated user."""
+    query = (
+        select(Transaction)
+        .where(Transaction.user_id == current_user.id)
+        .order_by(Transaction.created_at.desc())
+    )
+    if tx_type:
+        query = query.where(Transaction.type == tx_type)
+
+    # Total count
+    count_query = select(func.count(Transaction.id)).where(Transaction.user_id == current_user.id)
+    if tx_type:
+        count_query = count_query.where(Transaction.type == tx_type)
+    total = (await db.execute(count_query)).scalar() or 0
+
+    result = await db.execute(query.offset(offset).limit(limit))
+    transactions = result.scalars().all()
+
+    return {
+        "total": total,
+        "transactions": [
+            {
+                "id": str(t.id),
+                "type": t.type,
+                "amount": t.amount,
+                "balance_after": t.balance_after,
+                "description": t.description,
+                "reference_id": t.reference_id,
+                "created_at": t.created_at.isoformat(),
+            }
+            for t in transactions
+        ],
     }
