@@ -102,6 +102,7 @@ class BotManager:
                 poll_interval_seconds=bot.poll_interval_seconds,
                 lookback_bars=bot.lookback_bars,
                 script_source=script.source,
+                magic_number=bot.magic_number or 0,
                 mt5_backend=self._mt5_backend,
                 mt5_bridge_url=self._mt5_bridge_url,
             )

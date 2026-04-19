@@ -41,6 +41,10 @@ class Bot(Base):
     cooldown_seconds: Mapped[int] = mapped_column(Integer, default=60, server_default=text("60"))
     poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=60, server_default=text("60"))
     lookback_bars: Mapped[int] = mapped_column(Integer, default=200, server_default=text("200"))
+    magic_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"),
+        doc="Unique MT5 magic number for trade isolation"
+    )
     is_live: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str] = mapped_column(
         String(20), default="stopped", server_default=text("'stopped'")

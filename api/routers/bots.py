@@ -1,6 +1,7 @@
 """Bot routes — CRUD + lifecycle management + logs + trades + stats."""
 
 import logging
+import random
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -82,6 +83,9 @@ async def create_bot(
     if error:
         raise HTTPException(status_code=400, detail=error)
 
+    # Generate a unique MT5 magic number for trade isolation
+    magic_number = random.randint(100_000, 2_147_483_647)
+
     bot = Bot(
         user_id=current_user.id,
         broker_account_id=body.broker_account_id,
@@ -97,6 +101,7 @@ async def create_bot(
         poll_interval_seconds=body.poll_interval_seconds,
         lookback_bars=body.lookback_bars,
         is_live=body.is_live,
+        magic_number=magic_number,
     )
     db.add(bot)
     await db.flush()

@@ -1,4 +1,9 @@
-"""Order executor — places and closes trades via MetaAPI."""
+"""Order executor — places and closes trades via MetaAPI.
+
+Uses MT5 magic numbers to isolate trades per bot. Each bot gets a unique
+magic number so it only sees and manages its own positions — even when
+multiple bots trade the same symbol on the same account.
+"""
 
 from __future__ import annotations
 
@@ -17,10 +22,11 @@ class Executor:
     In dry-run mode, logs orders without executing.
     """
 
-    def __init__(self, connection, symbol: str, is_live: bool = False):
+    def __init__(self, connection, symbol: str, is_live: bool = False, magic: int = 0):
         self._conn = connection
         self._symbol = symbol
         self._is_live = is_live
+        self._magic = magic
         self._print_fn = None  # Set by bridge for per-bot output isolation
 
     def _print(self, *args):
@@ -29,15 +35,26 @@ class Executor:
         else:
             print(*args, flush=True)
 
+    def _order_options(self) -> dict:
+        """Build MetaAPI order options with magic number and comment."""
+        opts = {}
+        if self._magic:
+            opts["magic"] = self._magic
+            opts["comment"] = f"pf-{self._magic}"
+        else:
+            opts["comment"] = "pineforge"
+        return opts
+
     async def open_buy(self, volume: float) -> dict[str, Any] | None:
-        """Place a market buy order."""
-        logger.info("BUY %s %.2f lots of %s", "LIVE" if self._is_live else "DRY", volume, self._symbol)
+        """Place a market buy order tagged with this bot's magic number."""
+        logger.info("BUY %s %.2f lots of %s (magic=%d)", "LIVE" if self._is_live else "DRY", volume, self._symbol, self._magic)
         if not self._is_live:
             self._print(f"  [DRY RUN] Would BUY {volume} lots of {self._symbol}")
             return {"dry_run": True, "action": "buy", "volume": volume}
         try:
+            options = self._order_options()
             result = await asyncio.wait_for(
-                self._conn.create_market_buy_order(self._symbol, volume),
+                self._conn.create_market_buy_order(self._symbol, volume, options=options),
                 timeout=TIMEOUT,
             )
             logger.info("BUY order filled: %s", result)
@@ -54,14 +71,15 @@ class Executor:
             return None
 
     async def open_sell(self, volume: float) -> dict[str, Any] | None:
-        """Place a market sell order."""
-        logger.info("SELL %s %.2f lots of %s", "LIVE" if self._is_live else "DRY", volume, self._symbol)
+        """Place a market sell order tagged with this bot's magic number."""
+        logger.info("SELL %s %.2f lots of %s (magic=%d)", "LIVE" if self._is_live else "DRY", volume, self._symbol, self._magic)
         if not self._is_live:
             self._print(f"  [DRY RUN] Would SELL {volume} lots of {self._symbol}")
             return {"dry_run": True, "action": "sell", "volume": volume}
         try:
+            options = self._order_options()
             result = await asyncio.wait_for(
-                self._conn.create_market_sell_order(self._symbol, volume),
+                self._conn.create_market_sell_order(self._symbol, volume, options=options),
                 timeout=TIMEOUT,
             )
             logger.info("SELL order filled: %s", result)
@@ -78,28 +96,33 @@ class Executor:
             return None
 
     async def close_all(self) -> bool:
-        """Close all open positions for the symbol."""
-        logger.info("CLOSE ALL %s %s", "LIVE" if self._is_live else "DRY", self._symbol)
+        """Close only positions opened by this bot (matching magic number)."""
+        logger.info("CLOSE ALL %s %s (magic=%d)", "LIVE" if self._is_live else "DRY", self._symbol, self._magic)
         if not self._is_live:
             self._print(f"  [DRY RUN] Would CLOSE ALL {self._symbol} positions pnl=0.00")
             return True
         try:
-            # Get position profit before closing
-            pnl = 0.0
-            try:
-                positions = await self.get_positions()
-                for p in positions:
-                    pnl += p.get("profit", 0) or 0
-            except Exception:
-                pass
+            positions = await self.get_positions()
+            if not positions:
+                self._print(f"  [LIVE] No {self._symbol} positions to close (magic={self._magic})")
+                return True
 
-            result = await asyncio.wait_for(
-                self._conn.close_positions_by_symbol(self._symbol),
-                timeout=TIMEOUT,
-            )
-            logger.info("Close all result: %s", result)
-            self._print(f"  [LIVE] Closed all {self._symbol} positions pnl={pnl:.2f}")
-            return True
+            pnl = sum(p.get("profit", 0) or 0 for p in positions)
+            closed = 0
+            for p in positions:
+                pos_id = p.get("id")
+                if pos_id:
+                    try:
+                        await asyncio.wait_for(
+                            self._conn.close_position(pos_id),
+                            timeout=TIMEOUT,
+                        )
+                        closed += 1
+                    except Exception as e:
+                        logger.error("Failed to close position %s: %s", pos_id, e)
+
+            self._print(f"  [LIVE] Closed {closed}/{len(positions)} {self._symbol} positions pnl={pnl:.2f}")
+            return closed == len(positions)
         except asyncio.TimeoutError:
             logger.error("Close all timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] Close all timed out after {TIMEOUT}s")
@@ -133,7 +156,7 @@ class Executor:
             return False
 
     async def get_positions(self) -> list[dict[str, Any]]:
-        """Get all open positions."""
+        """Get open positions for this bot's symbol AND magic number only."""
         if not self._is_live:
             return []
         try:
@@ -141,7 +164,15 @@ class Executor:
                 self._conn.get_positions(),
                 timeout=TIMEOUT,
             )
-            return [p for p in (positions or []) if p.get("symbol") == self._symbol]
+            filtered = []
+            for p in (positions or []):
+                if p.get("symbol") != self._symbol:
+                    continue
+                # Filter by magic number — only see this bot's trades
+                if self._magic and p.get("magic") != self._magic:
+                    continue
+                filtered.append(p)
+            return filtered
         except asyncio.TimeoutError:
             logger.error("Get positions timed out after %ds", TIMEOUT)
             return []

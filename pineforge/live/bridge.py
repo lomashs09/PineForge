@@ -247,7 +247,7 @@ class LiveBridge:
             await connection.wait_synchronized(timeout_in_seconds=120)
             self._print("Connected to MT5 account.\n")
 
-            executor = Executor(connection, cfg.symbol, cfg.is_live)
+            executor = Executor(connection, cfg.symbol, cfg.is_live, magic=cfg.magic_number)
 
         # Propagate per-bot print function to executor for output isolation
         if hasattr(executor, '_print_fn') and self._print_fn:
