@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..database import get_db
 from ..middleware.auth import get_current_user
+from ..models.transaction import Transaction
 from ..models.user import User
 from ..services.transaction_service import record_transaction
 
@@ -185,6 +186,15 @@ async def add_funds(
             "usd_credit": str(usd_credit),
         },
     )
+
+    # Record pending transaction (balance unchanged, just audit trail)
+    currency_sym = '₹' if currency == 'INR' else '$'
+    await record_transaction(
+        db, current_user, "deposit_pending", 0,
+        f"Stripe checkout started: {currency_sym}{body.amount:.2f} → ${usd_credit:.4f}",
+        reference_id=session.id,
+    )
+    await db.flush()
 
     return {"checkout_url": session.url, "usd_credit": usd_credit}
 
@@ -414,6 +424,15 @@ async def paypal_create_order(
         raise HTTPException(status_code=400, detail=f"PayPal error: {resp.text[:200]}")
 
     order = resp.json()
+
+    # Record pending transaction
+    await record_transaction(
+        db, current_user, "deposit_pending", 0,
+        f"PayPal checkout started: ${body.amount:.2f}",
+        reference_id=order["id"],
+    )
+    await db.flush()
+
     return {
         "order_id": order["id"],
         "client_id": get_settings().PAYPAL_CLIENT_ID,
@@ -447,10 +466,12 @@ async def paypal_capture(
 
     if resp.status_code >= 400:
         logger.error("PayPal capture failed: %s", resp.text)
+        await _mark_paypal_failed(db, current_user, body.order_id, f"Capture HTTP {resp.status_code}")
         raise HTTPException(status_code=400, detail=f"PayPal capture failed: {resp.text[:200]}")
 
     capture = resp.json()
     if capture.get("status") != "COMPLETED":
+        await _mark_paypal_failed(db, current_user, body.order_id, f"Status: {capture.get('status')}")
         raise HTTPException(status_code=400, detail=f"Payment not completed: {capture.get('status')}")
 
     # Verify amount matches
@@ -460,7 +481,19 @@ async def paypal_capture(
     captured_currency = captures[0].get("amount", {}).get("currency_code", "")
 
     if captured_currency != "USD" or abs(captured_amount - body.amount) > 0.01:
+        await _mark_paypal_failed(db, current_user, body.order_id, "Amount mismatch")
         raise HTTPException(status_code=400, detail="Payment amount mismatch")
+
+    # Mark pending as completed
+    pending = (await db.execute(
+        select(Transaction).where(
+            Transaction.reference_id == body.order_id,
+            Transaction.type == "deposit_pending",
+        )
+    )).scalar_one_or_none()
+    if pending:
+        pending.type = "deposit_completed"
+        pending.description = f"PayPal payment successful: ${captured_amount:.2f}"
 
     # Credit balance
     current_user.balance = round((current_user.balance or 0) + captured_amount, 4)
@@ -479,6 +512,26 @@ async def paypal_capture(
         "balance": current_user.balance,
         "order_id": body.order_id,
     }
+
+
+async def _mark_paypal_failed(db: AsyncSession, user: User, order_id: str, reason: str):
+    """Mark a pending PayPal transaction as failed."""
+    pending = (await db.execute(
+        select(Transaction).where(
+            Transaction.reference_id == order_id,
+            Transaction.type == "deposit_pending",
+        )
+    )).scalar_one_or_none()
+    if pending:
+        pending.type = "deposit_failed"
+        pending.description += f" — {reason}"
+    else:
+        await record_transaction(
+            db, user, "deposit_failed", 0,
+            f"PayPal capture failed: {reason}",
+            reference_id=order_id,
+        )
+    await db.flush()
 
 
 # ── Billing Portal ────────────────────────────────────────────────
@@ -538,6 +591,9 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
     elif event_type == "checkout.session.completed":
         await _handle_checkout_completed(data, db)
+
+    elif event_type == "checkout.session.expired":
+        await _handle_checkout_expired(data, db)
 
     return {"received": True}
 
@@ -632,6 +688,18 @@ async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
 
     user.balance = round((user.balance or 0) + usd_credit, 4)
     currency_sym = '₹' if paid_currency == 'INR' else '$'
+
+    # Mark any pending transaction as completed, then record the deposit
+    pending = (await db.execute(
+        select(Transaction).where(
+            Transaction.reference_id == session_id,
+            Transaction.type == "deposit_pending",
+        )
+    )).scalar_one_or_none()
+    if pending:
+        pending.type = "deposit_completed"
+        pending.description = f"Stripe payment successful: {currency_sym}{paid_amount:.2f}"
+
     await record_transaction(
         db, user, "deposit", usd_credit,
         f"Stripe {currency_sym}{paid_amount:.2f} → ${usd_credit:.4f}",
@@ -641,3 +709,47 @@ async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
                 usd_credit, user.email, currency_sym,
                 paid_amount, user.balance, session_id)
     await db.commit()
+
+
+async def _handle_checkout_expired(session: dict, db: AsyncSession) -> None:
+    """Handle expired/abandoned Stripe checkout sessions."""
+    session_id = session.get("id", "")
+    metadata = session.get("metadata", {})
+
+    if metadata.get("type") != "add_funds":
+        return
+
+    # Mark the pending transaction as failed
+    pending = (await db.execute(
+        select(Transaction).where(
+            Transaction.reference_id == session_id,
+            Transaction.type == "deposit_pending",
+        )
+    )).scalar_one_or_none()
+
+    if pending:
+        pending.type = "deposit_failed"
+        pending.description += " — expired/abandoned"
+        logger.info("Stripe checkout expired: session=%s user_id=%s", session_id, metadata.get("user_id"))
+        await db.commit()
+    else:
+        # No pending record (e.g. created before this feature) — create a failed record
+        user_id = metadata.get("user_id")
+        if user_id:
+            import uuid as _uuid
+            try:
+                uid = _uuid.UUID(user_id)
+            except (ValueError, AttributeError):
+                return
+            result = await db.execute(select(User).where(User.id == uid))
+            user = result.scalar_one_or_none()
+            if user:
+                amount_raw = metadata.get("amount", "0")
+                currency = metadata.get("currency", "USD").upper()
+                currency_sym = '₹' if currency == 'INR' else '$'
+                await record_transaction(
+                    db, user, "deposit_failed", 0,
+                    f"Stripe checkout expired: {currency_sym}{amount_raw}",
+                    reference_id=session_id,
+                )
+                await db.commit()

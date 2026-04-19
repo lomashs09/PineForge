@@ -369,3 +369,129 @@ async def test_account_setup_charge_description():
     assert "MT5 account setup" in txn.description
     assert "12345@MetaQuotes-Demo" in txn.description
     assert txn.amount == -3.0
+
+
+# ── Pending / failed deposit tests ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_deposit_pending_stripe():
+    """Stripe checkout start should record a deposit_pending with zero amount."""
+    user = _make_user(balance=10.0)
+    db = _make_db()
+
+    txn = await record_transaction(
+        db, user, "deposit_pending", 0,
+        "Stripe checkout started: ₹500.00 → $5.9000",
+        reference_id="cs_test_pending123",
+    )
+
+    assert txn.type == "deposit_pending"
+    assert txn.amount == 0
+    assert txn.balance_after == 10.0
+    assert "checkout started" in txn.description
+    assert "₹500.00" in txn.description
+    assert txn.reference_id == "cs_test_pending123"
+
+
+@pytest.mark.asyncio
+async def test_deposit_pending_paypal():
+    """PayPal order creation should record a deposit_pending."""
+    user = _make_user(balance=25.0)
+    db = _make_db()
+
+    txn = await record_transaction(
+        db, user, "deposit_pending", 0,
+        "PayPal checkout started: $10.00",
+        reference_id="PAYPAL-ORDER-456",
+    )
+
+    assert txn.type == "deposit_pending"
+    assert txn.amount == 0
+    assert "PayPal checkout started" in txn.description
+    assert txn.reference_id == "PAYPAL-ORDER-456"
+
+
+@pytest.mark.asyncio
+async def test_deposit_failed_stripe_expired():
+    """Expired Stripe checkout should record deposit_failed."""
+    user = _make_user(balance=10.0)
+    db = _make_db()
+
+    txn = await record_transaction(
+        db, user, "deposit_failed", 0,
+        "Stripe checkout expired: ₹500",
+        reference_id="cs_test_expired456",
+    )
+
+    assert txn.type == "deposit_failed"
+    assert txn.amount == 0
+    assert txn.balance_after == 10.0
+    assert "expired" in txn.description
+
+
+@pytest.mark.asyncio
+async def test_deposit_failed_paypal_capture():
+    """Failed PayPal capture should record deposit_failed."""
+    user = _make_user(balance=10.0)
+    db = _make_db()
+
+    txn = await record_transaction(
+        db, user, "deposit_failed", 0,
+        "PayPal capture failed: Capture HTTP 400",
+        reference_id="PAYPAL-ORDER-FAIL",
+    )
+
+    assert txn.type == "deposit_failed"
+    assert "capture failed" in txn.description
+    assert txn.reference_id == "PAYPAL-ORDER-FAIL"
+
+
+@pytest.mark.asyncio
+async def test_deposit_completed_marks_pending():
+    """On success, pending transaction type should be updatable to deposit_completed."""
+    user = _make_user(balance=11.18)
+    db = _make_db()
+
+    # Simulate pending → completed flow
+    pending = await record_transaction(
+        db, user, "deposit_pending", 0,
+        "Stripe checkout started: ₹100.00 → $1.1800",
+        reference_id="cs_test_flow",
+    )
+    assert pending.type == "deposit_pending"
+
+    # Simulate webhook updating the pending record
+    pending.type = "deposit_completed"
+    pending.description = "Stripe payment successful: ₹100.00"
+    assert pending.type == "deposit_completed"
+    assert "successful" in pending.description
+
+    # The actual deposit transaction is recorded separately
+    deposit = await record_transaction(
+        db, user, "deposit", 1.18,
+        "Stripe ₹100.00 → $1.1800",
+        reference_id="cs_test_flow",
+    )
+    assert deposit.type == "deposit"
+    assert deposit.amount == 1.18
+
+
+@pytest.mark.asyncio
+async def test_pending_to_failed_flow():
+    """Pending transaction should be updatable to deposit_failed on expiry."""
+    user = _make_user(balance=10.0)
+    db = _make_db()
+
+    pending = await record_transaction(
+        db, user, "deposit_pending", 0,
+        "Stripe checkout started: ₹500.00 → $5.9000",
+        reference_id="cs_test_expire_flow",
+    )
+
+    # Simulate expiry webhook
+    pending.type = "deposit_failed"
+    pending.description += " — expired/abandoned"
+
+    assert pending.type == "deposit_failed"
+    assert "expired/abandoned" in pending.description
