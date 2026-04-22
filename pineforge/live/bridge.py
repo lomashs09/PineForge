@@ -287,6 +287,7 @@ class LiveBridge:
         self._connection = connection
         self._executor = executor
         self._consecutive_errors = 0
+        self._execution_failures = 0  # Track signal execution failures separately
 
         while not self._shutdown:
             try:
@@ -457,7 +458,7 @@ class LiveBridge:
         # Update stored references
         self._account = account
         self._connection = connection
-        self._executor = Executor(connection, cfg.symbol, cfg.is_live)
+        self._executor = Executor(connection, cfg.symbol, cfg.is_live, magic=cfg.magic_number)
         if self._print_fn:
             self._executor._print_fn = self._print_fn
 
@@ -567,7 +568,26 @@ class LiveBridge:
         # --- Step 1: Execute the PREVIOUS bar's signal at this bar's open ---
         if self._pending_signal is not None:
             self._print(f"  Executing queued signal: {self._pending_signal.upper()}")
-            await self._execute_signal(self._pending_signal, executor, cfg)
+            try:
+                await self._execute_signal(self._pending_signal, executor, cfg)
+                self._execution_failures = 0  # Reset on success
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception) as exec_err:
+                self._execution_failures += 1
+                is_cancel = isinstance(exec_err, asyncio.CancelledError)
+                self._print(f"  [WARN] Signal execution failed ({self._execution_failures}x): "
+                            f"{'connection dropped' if is_cancel else exec_err}")
+                # Reconnect after 2 consecutive execution failures
+                if self._execution_failures >= 2 and cfg.mt5_backend == "metaapi":
+                    await self._try_reconnect(cfg)
+                    executor = self._executor  # Use the fresh executor after reconnect
+                    # Retry the signal once after reconnect
+                    try:
+                        self._print(f"  Retrying signal: {self._pending_signal.upper()}")
+                        await self._execute_signal(self._pending_signal, executor, cfg)
+                        self._execution_failures = 0
+                        self._print(f"  Retry succeeded!")
+                    except Exception as retry_err:
+                        self._print(f"  Retry also failed: {retry_err}")
             self._pending_signal = None
 
         # --- Step 2: Feed this bar and compute the NEW signal (saved for next bar) ---
