@@ -16,17 +16,19 @@ from ..models.bot_trade import BotTrade
 
 # Patterns for parsing trade execution lines from LiveBridge/Executor print output
 # Format: [LIVE] BUY 0.01 XAUUSDm @ 4520.50 -> order #12345
+#   also: [LIVE] BUY 0.01 XAUUSDm @  -> order #12345  (empty price from MetaAPI)
 _TRADE_BUY_RE = re.compile(
-    r"\[(?:LIVE|DRY RUN)\]\s+BUY\s+([\d.]+)\s+(\S+)\s*(?:@\s*([\d.]+))?\s*->\s*order\s*#?(\S+)",
+    r"\[(?:LIVE|DRY RUN)\]\s+BUY\s+([\d.]+)\s+(\S+)\s*(?:@\s*([\d.]+)?)?\s*->\s*order\s*#?(\S+)",
     re.IGNORECASE,
 )
 _TRADE_SELL_RE = re.compile(
-    r"\[(?:LIVE|DRY RUN)\]\s+SELL\s+([\d.]+)\s+(\S+)\s*(?:@\s*([\d.]+))?\s*->\s*order\s*#?(\S+)",
+    r"\[(?:LIVE|DRY RUN)\]\s+SELL\s+([\d.]+)\s+(\S+)\s*(?:@\s*([\d.]+)?)?\s*->\s*order\s*#?(\S+)",
     re.IGNORECASE,
 )
 # Format: [LIVE] Closed all XAUUSDm positions pnl=-1.23
+#   also: [LIVE] Closed 1/1 XAUUSDm positions pnl=-1.23  (per-bot close)
 _TRADE_CLOSE_RE = re.compile(
-    r"\[(?:LIVE|DRY RUN)\]\s+Closed all\s+(\S+)\s+positions\s*(?:pnl=([-\d.]+))?",
+    r"\[(?:LIVE|DRY RUN)\]\s+Closed (?:all|\d+/\d+)\s+(\S+)\s+positions\s*(?:pnl=([-\d.]+))?",
     re.IGNORECASE,
 )
 _TRADE_WOULD_BUY_RE = re.compile(
@@ -237,7 +239,7 @@ class BotDatabaseHandler(logging.Handler):
 
 
 # Patterns for detecting log levels from print() output
-_LEVEL_TRADE_PATTERN = re.compile(r"\[(?:LIVE|DRY RUN)\]\s+(?:BUY|SELL|Would BUY|Would SELL|Close)", re.IGNORECASE)
+_LEVEL_TRADE_PATTERN = re.compile(r"\[(?:LIVE|DRY RUN)\]\s+(?:BUY|SELL|Would BUY|Would SELL|Close|No \S+ positions)", re.IGNORECASE)
 _LEVEL_SIGNAL_PATTERN = re.compile(r"Signal queued|Executing queued signal|Flipping:", re.IGNORECASE)
 _LEVEL_HEARTBEAT_PATTERN = re.compile(r"HEARTBEAT", re.IGNORECASE)
 _LEVEL_ERROR_PATTERN = re.compile(r"\[ERROR\]|Error:|Risk blocked:", re.IGNORECASE)

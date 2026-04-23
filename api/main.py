@@ -16,6 +16,7 @@ from .routers import accounts, admin, auth, billing, bots, dashboard, payments, 
 from .services.bot_manager import BotManager
 from .services.log_cleanup import log_cleanup_loop
 from .services.script_service import seed_system_scripts
+from .services.bot_health_check import bot_health_check_loop
 from .services.usage_billing import usage_billing_loop
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI):
         _fire_and_forget(bot_manager.restart_crashed_bots(), "restart_bots"),
         _fire_and_forget(log_cleanup_loop(async_session), "log_cleanup"),
         _fire_and_forget(usage_billing_loop(async_session, bot_manager), "usage_billing"),
+        _fire_and_forget(bot_health_check_loop(async_session), "bot_health_check"),
     ]
 
     yield
