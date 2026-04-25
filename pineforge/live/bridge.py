@@ -274,6 +274,12 @@ class LiveBridge:
         self._pending_signal = None
 
         self._print(f"Warmup complete: {self._bar_count} bars loaded.")
+
+        # ── Sync with existing MT5 positions ─────────────────────────
+        # On restart, the bot needs to know if it has positions already open
+        # so the strategy doesn't open duplicate trades or ignore existing ones.
+        await self._sync_existing_positions(executor, cfg)
+
         self._print(f"Listening for new {cfg.timeframe} bars on {cfg.symbol}...")
         self._print(f"  Execution mode: NEXT BAR OPEN (signal queued, executed on next bar)\n")
 
@@ -463,6 +469,56 @@ class LiveBridge:
             self._executor._print_fn = self._print_fn
 
         self._print("  Reconnected to MT5 account.")
+
+    async def _sync_existing_positions(self, executor: Executor, cfg: LiveConfig):
+        """Check MT5 for positions this bot previously opened and sync internal state.
+
+        Without this, a restarted bot doesn't know about its old positions and may:
+        - Open a duplicate trade instead of skipping (already in position)
+        - Fail to close an old position when the strategy flips direction
+        """
+        try:
+            positions = await executor.get_positions()
+        except Exception as e:
+            self._print(f"  [WARN] Could not check existing positions: {e}")
+            return
+
+        if not positions:
+            self._print("  No existing positions found for this bot.")
+            # Clear broker position to match reality
+            self._broker.position = None
+            return
+
+        # Use the first position to set broker state (we support max 1 position per bot)
+        pos = positions[0]
+        pos_type = pos.get("type", "")
+        is_long = "BUY" in pos_type
+        direction = "long" if is_long else "short"
+        entry_price = pos.get("openPrice", 0)
+        volume = pos.get("volume", cfg.lot_size)
+        pos_id = pos.get("id", "unknown")
+        profit = pos.get("profit", 0)
+
+        from ..broker import Trade
+        self._broker.position = Trade(
+            entry_id="synced_from_mt5",
+            direction=direction,
+            qty=volume,
+            entry_price=entry_price,
+            entry_bar=self._bar_count - 1,
+        )
+
+        self._print(f"  Synced existing position: {direction.upper()} {volume} lots @ {entry_price} "
+                     f"(P&L: ${profit:.2f}, ID: {pos_id})")
+
+        # Clear any signal computed during warmup — let the next real bar decide
+        # based on the actual market position
+        self._broker.pending_orders.clear()
+        self._pending_signal = None
+
+        if len(positions) > 1:
+            self._print(f"  [WARN] {len(positions)} positions found but only tracking the first. "
+                         f"Consider closing extras manually.")
 
     async def _fetch_direct_candles(self, symbol, timeframe, count):
         """Fetch candles using the direct MT5 terminal connection."""
