@@ -131,8 +131,8 @@ async def add_funds(
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     currency = body.currency.upper()
-    if currency not in ("INR", "USD"):
-        raise HTTPException(status_code=400, detail="Currency must be INR or USD")
+    if currency != "INR":
+        raise HTTPException(status_code=400, detail="Use PayPal for USD payments. This endpoint supports INR only.")
     if body.amount < 1:
         raise HTTPException(status_code=400, detail=f"Minimum top-up is {'₹' if currency == 'INR' else '$'}1")
     max_amount = 100000 if currency == "INR" else 1000

@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _MIN_PASSWORD_LENGTH = 8
+_MAX_PASSWORD_LENGTH = 1024  # bcrypt has a 72-byte limit; prevent DoS with huge payloads
 
 
 def _normalize_email(email: str) -> str:
@@ -92,6 +93,10 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     normalized_email = _normalize_email(body.email)
+    # Reject absurdly long passwords before bcrypt (72-byte limit can crash)
+    if len(body.password) > _MAX_PASSWORD_LENGTH:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
     result = await db.execute(select(User).where(User.email == normalized_email))
     user = result.scalar_one_or_none()
 
