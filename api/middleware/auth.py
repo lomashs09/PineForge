@@ -12,6 +12,7 @@ from ..config import get_settings
 from ..database import get_db
 from ..models.user import User
 from ..services.auth_service import decode_token
+from ..utils.log_context import user_id_var
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -46,7 +47,9 @@ async def get_current_user(
 
     # Bypass auth in dev mode
     if settings.AUTH_DISABLED:
-        return await _get_or_create_dev_user(db)
+        user = await _get_or_create_dev_user(db)
+        _bind_user_to_request_scope(user)
+        return user
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -72,7 +75,18 @@ async def get_current_user(
 
     if user is None or not user.is_active:
         raise credentials_exception
+    _bind_user_to_request_scope(user)
     return user
+
+
+def _bind_user_to_request_scope(user: User) -> None:
+    """Attach user identity to the per-request log + Sentry scope."""
+    user_id_var.set(str(user.id))
+    try:
+        import sentry_sdk
+        sentry_sdk.set_user({"id": str(user.id), "username": user.email})
+    except Exception:
+        pass
 
 
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:

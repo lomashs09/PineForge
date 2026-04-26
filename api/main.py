@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from .middleware.rate_limit import RateLimitMiddleware
+from .middleware.request_context import RequestContextMiddleware
 from .database import async_session, engine
 from .routers import accounts, admin, auth, billing, bots, dashboard, payments, scripts
 from .services.bot_manager import BotManager
@@ -33,7 +34,9 @@ from .services.log_cleanup import log_cleanup_loop
 from .services.script_service import seed_system_scripts
 from .services.bot_health_check import bot_health_check_loop
 from .services.usage_billing import usage_billing_loop
+from .utils.log_context import configure_logging
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -111,6 +114,10 @@ app.add_middleware(
 
 # Rate limiting on auth endpoints (login, register, resend-verification)
 app.add_middleware(RateLimitMiddleware)
+
+# Request context (X-Request-Id, access log, Sentry scope) — added LAST so it
+# wraps everything and every inner middleware/log line carries the request id.
+app.add_middleware(RequestContextMiddleware)
 
 
 # Request body size limit (1MB) to prevent DoS via huge payloads
