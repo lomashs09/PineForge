@@ -51,5 +51,30 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 "%s %s -> %d %dms client=%s",
                 request.method, request.url.path, status_code, duration_ms, client,
             )
+            _emit_metrics(request, status_code, duration_ms)
             request_id_var.reset(token_rid)
             user_id_var.reset(token_uid)
+
+
+def _emit_metrics(request: Request, status_code: int, duration_ms: int) -> None:
+    """Emit per-request count + duration to Sentry metrics.
+
+    Uses the route template (e.g. /api/bots/{bot_id}) instead of the raw path so
+    cardinality stays bounded.
+    """
+    try:
+        from sentry_sdk import metrics
+
+        route = request.scope.get("route")
+        path_template = getattr(route, "path", request.url.path) if route else request.url.path
+        attributes = {
+            "method": request.method,
+            "path": path_template,
+            "status": status_code,
+        }
+        metrics.count("api.requests", 1, attributes=attributes)
+        metrics.distribution(
+            "api.request.duration_ms", duration_ms, unit="millisecond", attributes=attributes,
+        )
+    except Exception:
+        pass
