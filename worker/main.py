@@ -29,6 +29,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 load_dotenv()
 
+# Initialize Sentry as early as possible so all subsequent imports are instrumented.
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        environment=os.getenv("APP_ENV", "development"),
+        release=os.getenv("SENTRY_RELEASE") or None,
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.0")),
+        send_default_pii=True,
+        server_name=os.getenv("WORKER_ID", "worker"),
+    )
+
 from worker.config import WorkerConfig
 from worker.executor import DirectExecutor
 from worker.account_manager import AccountManager

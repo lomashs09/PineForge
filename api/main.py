@@ -5,11 +5,26 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
+from .config import get_settings
+
+# Initialize Sentry before importing FastAPI/Starlette so auto-instrumentation patches them.
+_settings = get_settings()
+if _settings.SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=_settings.SENTRY_DSN,
+        environment=_settings.APP_ENV,
+        release=_settings.SENTRY_RELEASE or None,
+        traces_sample_rate=_settings.SENTRY_TRACES_SAMPLE_RATE,
+        profiles_sample_rate=_settings.SENTRY_PROFILES_SAMPLE_RATE,
+        send_default_pii=True,
+    )
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from .config import get_settings
 from .middleware.rate_limit import RateLimitMiddleware
 from .database import async_session, engine
 from .routers import accounts, admin, auth, billing, bots, dashboard, payments, scripts
@@ -123,6 +138,12 @@ app.include_router(bots.router)
 app.include_router(dashboard.router)
 app.include_router(payments.router)
 app.include_router(admin.router)
+
+
+if settings.APP_ENV != "production":
+    @app.get("/sentry-debug")
+    async def trigger_error():
+        division_by_zero = 1 / 0
 
 
 @app.get("/health")

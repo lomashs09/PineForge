@@ -5,3 +5,4 @@ uvicorn[standard]>=0.34.0
 pydantic>=2.0.0
 mt5linux>=0.2.0
 rpyc>=6.0.0
+sentry-sdk[fastapi]>=2.18.0

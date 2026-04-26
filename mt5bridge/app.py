@@ -10,7 +10,23 @@ multiple containers via docker-compose.
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+
+# Initialize Sentry before importing FastAPI so auto-instrumentation patches Starlette.
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        environment=os.getenv("APP_ENV", "development"),
+        release=os.getenv("SENTRY_RELEASE") or None,
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.0")),
+        send_default_pii=True,
+        server_name=os.getenv("MT5_BRIDGE_ID", "mt5bridge"),
+    )
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
