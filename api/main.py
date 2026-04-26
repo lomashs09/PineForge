@@ -28,7 +28,18 @@ from starlette.responses import JSONResponse
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_context import RequestContextMiddleware
 from .database import async_session, engine
-from .routers import accounts, admin, auth, billing, bots, dashboard, payments, scripts
+from .routers import (
+    accounts,
+    admin,
+    auth,
+    billing,
+    bots,
+    dashboard,
+    newsletter,
+    payments,
+    public_stats,
+    scripts,
+)
 from .services.bot_manager import BotManager
 from .services.log_cleanup import log_cleanup_loop
 from .services.script_service import seed_system_scripts
@@ -144,6 +155,8 @@ app.include_router(billing.router)
 app.include_router(bots.router)
 app.include_router(dashboard.router)
 app.include_router(payments.router)
+app.include_router(newsletter.router)
+app.include_router(public_stats.router)
 app.include_router(admin.router)
 
 
