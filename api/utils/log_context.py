@@ -29,7 +29,22 @@ def configure_logging(level: int = logging.INFO) -> None:
     root.addHandler(handler)
     root.setLevel(level)
 
-    # Uvicorn's default access log duplicates ours; keep only warnings+
+    # SQLAlchemy and uvicorn attach their own handlers at import time, which
+    # would emit alongside ours in a different format. Strip those and force
+    # propagation so every line goes through our single root handler.
+    for name in (
+        "sqlalchemy",
+        "sqlalchemy.engine",
+        "sqlalchemy.engine.Engine",
+        "sqlalchemy.pool",
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+    ):
+        lg = logging.getLogger(name)
+        lg.handlers.clear()
+        lg.propagate = True
+
+    # We emit our own access line in RequestContextMiddleware, so silence the
+    # uvicorn-level access log to avoid two lines per request.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    # SQLAlchemy echo at INFO floods journals with raw SQL; keep at WARNING
-    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
