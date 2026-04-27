@@ -67,6 +67,11 @@ class LiveBridge:
         self._connector = None  # Set when using bridge backend
         self._ectx: ExecutionContext | None = None
         self._print_fn = None  # Set by BotManager for per-bot output isolation
+        # Optional MetaAPI SynchronizationListener attached after sync
+        # completes. Populated by BotManager when the streaming-listener
+        # feature flag is on. Decoupled here so the pineforge package
+        # has no dependency on the api package.
+        self._trade_listener = None
 
     def _print(self, *args, **kwargs):
         """Print that routes to per-bot logger when running under BotManager."""
@@ -246,6 +251,16 @@ class LiveBridge:
             await connection.connect()
             await connection.wait_synchronized(timeout_in_seconds=120)
             self._print("Connected to MT5 account.\n")
+
+            # Attach streaming trade listener if BotManager provided one.
+            # Failures here are non-fatal: the parsed-print fallback path
+            # in BotPrintCapture still records trades.
+            if self._trade_listener is not None:
+                try:
+                    connection.add_synchronization_listener(self._trade_listener)
+                    self._print("Streaming trade listener attached.")
+                except Exception as e:
+                    self._print(f"  [WARN] Trade listener attach failed: {e}")
 
             executor = Executor(connection, cfg.symbol, cfg.is_live, magic=cfg.magic_number)
 

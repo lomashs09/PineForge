@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +28,15 @@ from ..models.script import Script
 from ..utils.bot_logger import BotDatabaseHandler, BotPrintCapture
 
 logger = logging.getLogger(__name__)
+
+
+def _streaming_listener_enabled() -> bool:
+    """Read USE_STREAMING_TRADE_LISTENER each call so a config change in
+    .env takes effect on the next bot start without restarting the API.
+    Defaults to True — set to '0' / 'false' to fall back to parsed-print only.
+    """
+    val = os.getenv("USE_STREAMING_TRADE_LISTENER", "1").strip().lower()
+    return val in ("1", "true", "yes", "on")
 
 
 class BotManager:
@@ -110,6 +120,37 @@ class BotManager:
 
             bridge = LiveBridge(config)
             bridge._register_signals = False  # Don't register OS signal handlers
+
+            # Phase 3: attach MetaAPI streaming trade listener for live bots.
+            # Behind a feature flag so we can roll forward / back without
+            # redeploying. Only attaches when the bot is running live AND
+            # the metaapi backend is in use (the listener has no value
+            # against the self-hosted bridge or direct MT5 path).
+            if (
+                bot.is_live
+                and self._mt5_backend == "metaapi"
+                and _streaming_listener_enabled()
+            ):
+                try:
+                    from .trade_listener import BotTradeListener
+                    listener = BotTradeListener(
+                        bot_id=bot_id,
+                        broker_account_id=account.id,
+                        magic_number=bot.magic_number or 0,
+                        session_factory=self._session_factory,
+                    )
+                    bridge._trade_listener = listener
+                    logger.info(
+                        "Streaming trade listener wired for bot %s (magic=%s)",
+                        bot_id, bot.magic_number,
+                    )
+                except Exception:
+                    # Never block bot start on listener wiring; the parsed
+                    # print path remains active.
+                    logger.exception(
+                        "Failed to construct BotTradeListener for bot %s — "
+                        "falling back to parsed-print only", bot_id,
+                    )
 
             # Set up dedicated logger
             bot_logger = logging.getLogger(f"bot.{bot_id}")
