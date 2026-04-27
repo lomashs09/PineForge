@@ -47,6 +47,12 @@ logger = logging.getLogger(__name__)
 BOT_STATUS_RECONCILE_INTERVAL_SECONDS = 60     # 1 min
 GRACE_PERIOD_SECONDS = 120                     # don't flag bots within 2 min of start
 
+# Hold off on the first reconciliation pass until BotManager.restart_crashed_bots
+# has had a realistic chance to run. That helper sleeps 5s, then attempts up to
+# 3 retries per bot with backoff — easily 60-90s of cold-start work. We must
+# not flag bots as orphans while that's still in flight.
+STARTUP_GRACE_SECONDS = 240                    # 4 min
+
 
 async def reconcile_bot_status_once(
     session_factory: async_sessionmaker, bot_manager
@@ -159,11 +165,23 @@ def _set_sentry_tag(key: str, value: str) -> None:
 async def bot_status_reconciliation_loop(
     session_factory: async_sessionmaker, bot_manager
 ) -> None:
-    """Loop forever, running reconcile_bot_status_once on a fixed cadence."""
+    """Loop forever, running reconcile_bot_status_once on a fixed cadence.
+
+    Sleeps STARTUP_GRACE_SECONDS before the first pass so that
+    BotManager.restart_crashed_bots() — which itself sleeps 5s and then
+    tries up to 3 reconnect attempts per bot — has enough time to pick
+    up bots that were running before an API restart. Without this, the
+    loop would falsely flag pre-restart bots as orphans and mark them
+    'error' before they could be auto-restarted.
+    """
     logger.info(
-        "Bot status reconciliation loop starting (interval=%ds, grace=%ds)",
-        BOT_STATUS_RECONCILE_INTERVAL_SECONDS, GRACE_PERIOD_SECONDS,
+        "Bot status reconciliation loop starting (interval=%ds, grace=%ds, startup_grace=%ds)",
+        BOT_STATUS_RECONCILE_INTERVAL_SECONDS, GRACE_PERIOD_SECONDS, STARTUP_GRACE_SECONDS,
     )
+    try:
+        await asyncio.sleep(STARTUP_GRACE_SECONDS)
+    except asyncio.CancelledError:
+        raise
     while True:
         try:
             stats = await reconcile_bot_status_once(session_factory, bot_manager)
