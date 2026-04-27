@@ -455,8 +455,15 @@ async def get_bot_positions(
     try:
         from ..services.account_service import get_account_positions
         all_positions = await get_account_positions(settings.METAAPI_TOKEN, account.metaapi_account_id)
-        # Filter to this bot's symbol
-        return [p for p in all_positions if p.get("symbol") == bot.symbol]
+        # Filter to this bot's symbol AND magic_number — without the magic
+        # filter, two bots on the same symbol/account would each see the
+        # OTHER bot's positions, double-counting PnL on the dashboard.
+        bot_magic = bot.magic_number or 0
+        return [
+            p for p in all_positions
+            if p.get("symbol") == bot.symbol
+            and int(p.get("magic") or 0) == bot_magic
+        ]
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch positions: {str(e)}")
 
@@ -542,6 +549,12 @@ async def get_bot_trade_history(
             end,
             symbol=bot.symbol,
         )
+
+        # Filter to deals stamped with THIS bot's magic — without this,
+        # two bots on the same symbol/account would each see the other
+        # bot's deals and double-count PnL.
+        bot_magic = bot.magic_number or 0
+        deals = [d for d in deals if int(d.get("magic") or 0) == bot_magic]
 
         # Pair entry/exit deals by position ID to show complete trades
         # Entry deals (DEAL_ENTRY_IN): profit=0, shows opening price
