@@ -20,9 +20,18 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
+
+# Predicate must match the partial-index WHERE clause from migration
+# c1d2e3f4a5b6 exactly, otherwise PG raises "no unique or exclusion
+# constraint matching the ON CONFLICT specification".
+_PARTIAL_INDEX_WHERE = text(
+    "order_id IS NOT NULL "
+    "AND order_id NOT LIKE 'close-all%' "
+    "AND order_id NOT LIKE 'dry-run%'"
+)
 
 try:
     from metaapi_cloud_sdk import SynchronizationListener
@@ -141,7 +150,10 @@ class BotTradeListener(SynchronizationListener):
                         opened_at=opened_at,
                         lifecycle_state="open",
                     )
-                    .on_conflict_do_nothing(index_elements=["bot_id", "order_id"])
+                    .on_conflict_do_nothing(
+                        index_elements=["bot_id", "order_id"],
+                        index_where=_PARTIAL_INDEX_WHERE,
+                    )
                 )
                 await session.execute(stmt)
                 await session.commit()
@@ -211,7 +223,10 @@ class BotTradeListener(SynchronizationListener):
                             closed_at=closed_at,
                             lifecycle_state="closed",
                         )
-                        .on_conflict_do_nothing(index_elements=["bot_id", "order_id"])
+                        .on_conflict_do_nothing(
+                        index_elements=["bot_id", "order_id"],
+                        index_where=_PARTIAL_INDEX_WHERE,
+                    )
                     )
                     await session.execute(stmt)
                     await session.commit()

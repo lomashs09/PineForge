@@ -8,12 +8,19 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ..models.bot_log import BotLog
 from ..models.bot_trade import BotTrade
+
+# Must match the partial-index WHERE clause in migration c1d2e3f4a5b6.
+_PARTIAL_INDEX_WHERE = text(
+    "order_id IS NOT NULL "
+    "AND order_id NOT LIKE 'close-all%' "
+    "AND order_id NOT LIKE 'dry-run%'"
+)
 
 # Patterns for parsing trade execution lines from LiveBridge/Executor print output
 # Format: [LIVE] BUY 0.01 XAUUSDm @ 4520.50 -> order #12345
@@ -258,6 +265,7 @@ class BotDatabaseHandler(logging.Handler):
                         .values(**entry)
                         .on_conflict_do_nothing(
                             index_elements=["bot_id", "order_id"],
+                            index_where=_PARTIAL_INDEX_WHERE,
                         )
                     )
                     await session.execute(stmt)
