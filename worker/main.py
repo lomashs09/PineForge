@@ -34,6 +34,18 @@ _SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 if _SENTRY_DSN:
     import sentry_sdk
 
+    def _sentry_before_send(event, hint):
+        """Same filter as the API: keep user-facing bot logs and recoverable
+        broker timeouts out of Sentry.
+        """
+        logger_name = event.get("logger") or ""
+        if logger_name.startswith("bot."):
+            return None
+        exc_info = hint.get("exc_info") if hint else None
+        if exc_info and exc_info[0] is asyncio.TimeoutError and logger_name.startswith("pineforge.live"):
+            return None
+        return event
+
     sentry_sdk.init(
         dsn=_SENTRY_DSN,
         environment=os.getenv("APP_ENV", "development"),
@@ -42,6 +54,7 @@ if _SENTRY_DSN:
         profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.0")),
         send_default_pii=True,
         server_name=os.getenv("WORKER_ID", "worker"),
+        before_send=_sentry_before_send,
     )
 
 from worker.config import WorkerConfig

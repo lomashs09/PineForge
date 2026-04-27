@@ -62,7 +62,7 @@ class Executor:
             self._print(f"  [LIVE] BUY {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}")
             return result
         except asyncio.TimeoutError:
-            logger.error("BUY order timed out after %ds", TIMEOUT)
+            logger.warning("BUY order timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] BUY timed out after {TIMEOUT}s")
             return None
         except Exception as e:
@@ -87,7 +87,7 @@ class Executor:
             self._print(f"  [LIVE] SELL {volume} {self._symbol} @ {price} -> order #{result.get('orderId', 'N/A')}")
             return result
         except asyncio.TimeoutError:
-            logger.error("SELL order timed out after %ds", TIMEOUT)
+            logger.warning("SELL order timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] SELL timed out after {TIMEOUT}s")
             return None
         except Exception as e:
@@ -124,7 +124,7 @@ class Executor:
             self._print(f"  [LIVE] Closed {closed}/{len(positions)} {self._symbol} positions pnl={pnl:.2f}")
             return closed == len(positions)
         except asyncio.TimeoutError:
-            logger.error("Close all timed out after %ds", TIMEOUT)
+            logger.warning("Close all timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] Close all timed out after {TIMEOUT}s")
             return False
         except Exception as e:
@@ -147,7 +147,7 @@ class Executor:
             self._print(f"  [LIVE] Closed position {position_id}")
             return True
         except asyncio.TimeoutError:
-            logger.error("Close position %s timed out after %ds", position_id, TIMEOUT)
+            logger.warning("Close position %s timed out after %ds", position_id, TIMEOUT)
             self._print(f"  [ERROR] Close position timed out after {TIMEOUT}s")
             return False
         except Exception as e:
@@ -174,7 +174,7 @@ class Executor:
                 filtered.append(p)
             return filtered
         except asyncio.TimeoutError:
-            logger.error("Get positions timed out after %ds", TIMEOUT)
+            logger.warning("Get positions timed out after %ds", TIMEOUT)
             return []
         except Exception as e:
             logger.error("Get positions failed: %s", e)
@@ -190,7 +190,7 @@ class Executor:
                 timeout=TIMEOUT,
             )
         except asyncio.TimeoutError:
-            logger.error("Get account info timed out after %ds", TIMEOUT)
+            logger.warning("Get account info timed out after %ds", TIMEOUT)
             return None
         except Exception as e:
             logger.error("Get account info failed: %s", e)

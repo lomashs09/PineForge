@@ -12,6 +12,24 @@ _settings = get_settings()
 if _settings.SENTRY_DSN:
     import sentry_sdk
 
+    def _sentry_before_send(event, hint):
+        """Drop events that are user-facing bot output, not platform errors.
+
+        - bot.<uuid> loggers carry the user's bot console output (captured via
+          BotPrintCapture). Those go to the bot_logs table and the user's bot
+          dashboard — they're not platform issues to be paged on.
+        - asyncio.TimeoutError from pineforge.live.* is a recoverable broker
+          latency event, already demoted to WARNING; this is a defense-in-depth
+          guard in case any other path emits it at ERROR.
+        """
+        logger_name = event.get("logger") or ""
+        if logger_name.startswith("bot."):
+            return None
+        exc_info = hint.get("exc_info") if hint else None
+        if exc_info and exc_info[0] is asyncio.TimeoutError and logger_name.startswith("pineforge.live"):
+            return None
+        return event
+
     sentry_sdk.init(
         dsn=_settings.SENTRY_DSN,
         environment=_settings.APP_ENV,
@@ -19,6 +37,7 @@ if _settings.SENTRY_DSN:
         traces_sample_rate=_settings.SENTRY_TRACES_SAMPLE_RATE,
         profiles_sample_rate=_settings.SENTRY_PROFILES_SAMPLE_RATE,
         send_default_pii=True,
+        before_send=_sentry_before_send,
     )
 
 from fastapi import FastAPI, Request

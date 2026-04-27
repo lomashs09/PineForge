@@ -38,7 +38,7 @@ async def fetch_candles(account, symbol: str, timeframe: str, limit: int = 200) 
             timeout=30,
         )
     except asyncio.TimeoutError:
-        logger.error("Candle fetch timed out after 30s")
+        logger.warning("Candle fetch timed out after 30s")
         return []
 
     if not candles:
