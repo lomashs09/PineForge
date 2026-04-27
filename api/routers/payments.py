@@ -15,6 +15,7 @@ from ..middleware.auth import get_current_user
 from ..models.transaction import Transaction
 from ..models.user import User
 from ..services.transaction_service import record_transaction
+from ..utils import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -709,6 +710,17 @@ async def _handle_checkout_completed(session: dict, db: AsyncSession) -> None:
                 usd_credit, user.email, currency_sym,
                 paid_amount, user.balance, session_id)
     await db.commit()
+
+    metrics.count(
+        "payment.completed",
+        1,
+        attributes={"provider": "stripe", "currency": paid_currency, "type": "add_funds"},
+    )
+    metrics.distribution(
+        "payment.amount_usd",
+        usd_credit,
+        attributes={"provider": "stripe", "currency": paid_currency},
+    )
 
 
 async def _handle_checkout_expired(session: dict, db: AsyncSession) -> None:

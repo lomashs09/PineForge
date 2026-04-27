@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from ..models.bot import Bot
 from ..models.broker_account import BrokerAccount
+from ..utils import metrics
 
 # Lazy import to avoid circular deps — used in _run_bot_wrapper
 _market_hours = None
@@ -166,6 +167,7 @@ class BotManager:
                 if bot:
                     bot.status = "running"
                     await db.commit()
+                    metrics.count("bot.started", 1, attributes={"bot_id": str(bot_id)})
 
             while retry_count <= max_retries and not user_stopped and not self._shutting_down:
                 # Inject per-bot print
@@ -232,6 +234,7 @@ class BotManager:
                             b.error_message = str(e)[:500]
                             b.stopped_at = datetime.now(timezone.utc)
                             await db.commit()
+                    metrics.count("bot.stopped", 1, attributes={"reason": "script_error"})
                     return
                 except Exception as e:
                     err_str = str(e).lower()
@@ -247,6 +250,7 @@ class BotManager:
                                 b.error_message = str(e)[:500]
                                 b.stopped_at = datetime.now(timezone.utc)
                                 await db.commit()
+                        metrics.count("bot.stopped", 1, attributes={"reason": "permanent_error"})
                         return
                     else:
                         is_closed, _ = _get_market_hours()[0](bridge.config.symbol)
@@ -272,6 +276,7 @@ class BotManager:
                         bot.status = "stopped"
                         bot.stopped_at = datetime.now(timezone.utc)
                         await db.commit()
+                metrics.count("bot.stopped", 1, attributes={"reason": "user"})
             elif retry_count > max_retries:
                 logger.error("Bot %s exhausted %s retries — setting error", bot_id, max_retries)
                 async with self._session_factory() as db:
@@ -282,6 +287,7 @@ class BotManager:
                         bot.error_message = f"Connection lost after {retry_count} reconnect attempts. Click Start to retry."
                         bot.stopped_at = datetime.now(timezone.utc)
                         await db.commit()
+                metrics.count("bot.stopped", 1, attributes={"reason": "max_retries"})
 
         except asyncio.CancelledError:
             if not self._shutting_down:

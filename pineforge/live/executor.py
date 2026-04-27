@@ -16,6 +16,15 @@ logger = logging.getLogger("pineforge.live.executor")
 TIMEOUT = 30
 
 
+def _emit_timeout_metric(op: str) -> None:
+    """Increment bot.timeout. Self-contained so this package stays standalone."""
+    try:
+        from sentry_sdk import metrics
+        metrics.count("bot.timeout", 1, attributes={"op": op})
+    except Exception:
+        pass
+
+
 class Executor:
     """Wraps MetaAPI connection for order execution.
 
@@ -64,6 +73,7 @@ class Executor:
         except asyncio.TimeoutError:
             logger.warning("BUY order timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] BUY timed out after {TIMEOUT}s")
+            _emit_timeout_metric("buy")
             return None
         except Exception as e:
             logger.error("BUY order failed: %s", e)
@@ -89,6 +99,7 @@ class Executor:
         except asyncio.TimeoutError:
             logger.warning("SELL order timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] SELL timed out after {TIMEOUT}s")
+            _emit_timeout_metric("sell")
             return None
         except Exception as e:
             logger.error("SELL order failed: %s", e)
@@ -126,6 +137,7 @@ class Executor:
         except asyncio.TimeoutError:
             logger.warning("Close all timed out after %ds", TIMEOUT)
             self._print(f"  [ERROR] Close all timed out after {TIMEOUT}s")
+            _emit_timeout_metric("close_all")
             return False
         except Exception as e:
             logger.error("Close all failed: %s", e)
@@ -149,6 +161,7 @@ class Executor:
         except asyncio.TimeoutError:
             logger.warning("Close position %s timed out after %ds", position_id, TIMEOUT)
             self._print(f"  [ERROR] Close position timed out after {TIMEOUT}s")
+            _emit_timeout_metric("close_position")
             return False
         except Exception as e:
             logger.error("Close position %s failed: %s", position_id, e)
@@ -175,6 +188,7 @@ class Executor:
             return filtered
         except asyncio.TimeoutError:
             logger.warning("Get positions timed out after %ds", TIMEOUT)
+            _emit_timeout_metric("get_positions")
             return []
         except Exception as e:
             logger.error("Get positions failed: %s", e)
@@ -191,6 +205,7 @@ class Executor:
             )
         except asyncio.TimeoutError:
             logger.warning("Get account info timed out after %ds", TIMEOUT)
+            _emit_timeout_metric("get_account_info")
             return None
         except Exception as e:
             logger.error("Get account info failed: %s", e)

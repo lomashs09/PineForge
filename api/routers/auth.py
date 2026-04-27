@@ -32,6 +32,7 @@ from ..services.auth_service import (
     verify_password,
 )
 from ..services.email_service import EmailRateLimited, generate_verification_token, send_verification_email
+from ..utils import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         logger.error("Failed to send verification email to %s: %s", normalized_email, e)
 
     logger.info("New user registered: %s", normalized_email)
+    metrics.count("auth.signup", 1)
     return user
 
 
@@ -108,6 +110,11 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if user is None or not password_ok:
         logger.warning("Failed login attempt for: %s", body.email)
+        metrics.count(
+            "auth.login.failed",
+            1,
+            attributes={"reason": "no_user" if user is None else "bad_password"},
+        )
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.is_active:
