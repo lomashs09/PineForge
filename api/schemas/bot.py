@@ -13,9 +13,9 @@ class BotCreate(BaseModel):
     script_id: uuid.UUID
     symbol: str = Field(..., min_length=1, max_length=20)
     timeframe: str = Field(..., min_length=1, max_length=10)
-    lot_size: float = Field(..., gt=0, le=100, description="Trade lot size (must be > 0)")
+    lot_size: float = Field(..., gt=0, le=1, description="Trade lot size (0 < lot_size <= 1)")
     is_live: bool = False
-    max_lot_size: float = Field(default=0.1, gt=0, le=100)
+    max_lot_size: float = Field(default=0.1, gt=0, le=1)
     max_daily_loss_pct: float = Field(default=5.0, gt=0, le=100)
     max_open_positions: int = Field(default=1, ge=1, le=50)
     cooldown_seconds: int = Field(default=60, ge=0, le=86400)
@@ -35,9 +35,9 @@ class BotUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     symbol: Optional[str] = Field(default=None, min_length=1, max_length=20)
     timeframe: Optional[str] = Field(default=None, min_length=1, max_length=10)
-    lot_size: Optional[float] = Field(default=None, gt=0, le=100)
+    lot_size: Optional[float] = Field(default=None, gt=0, le=1)
     is_live: Optional[bool] = None
-    max_lot_size: Optional[float] = Field(default=None, gt=0, le=100)
+    max_lot_size: Optional[float] = Field(default=None, gt=0, le=1)
     max_daily_loss_pct: Optional[float] = Field(default=None, gt=0, le=100)
     max_open_positions: Optional[int] = Field(default=None, ge=1, le=50)
     cooldown_seconds: Optional[int] = Field(default=None, ge=0, le=86400)
