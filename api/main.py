@@ -65,6 +65,7 @@ from .services.script_service import seed_system_scripts
 from .services.bot_health_check import bot_health_check_loop
 from .services.usage_billing import usage_billing_loop
 from .services.position_reconcile import position_reconciliation_loop
+from .services.bot_status_reconcile import bot_status_reconciliation_loop
 from .utils.log_context import configure_logging
 
 configure_logging()
@@ -116,6 +117,10 @@ async def lifespan(app: FastAPI):
         _fire_and_forget(
             position_reconciliation_loop(async_session, settings.METAAPI_TOKEN),
             "position_reconcile",
+        ),
+        _fire_and_forget(
+            bot_status_reconciliation_loop(async_session, bot_manager),
+            "bot_status_reconcile",
         ),
     ]
 
