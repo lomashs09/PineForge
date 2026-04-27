@@ -54,6 +54,10 @@ class BotManager:
         self._bot_account_ids: Dict[uuid.UUID, str] = {}  # bot_id → metaapi_account_id
         self._start_locks: Dict[uuid.UUID, asyncio.Lock] = {}
         self._shutting_down = False  # Set during app shutdown to skip status updates
+        # Phase 3: parallel streaming connections for trade-event listening.
+        # Keyed by bot_id, value is the StreamingMetaApiConnectionInstance —
+        # held here for the bot's lifetime so the SDK doesn't gc it.
+        self._bot_streaming_connections: Dict[uuid.UUID, object] = {}
 
     @property
     def running_bot_count(self) -> int:
@@ -121,15 +125,20 @@ class BotManager:
             bridge = LiveBridge(config)
             bridge._register_signals = False  # Don't register OS signal handlers
 
-            # Phase 3: attach MetaAPI streaming trade listener for live bots.
-            # Behind a feature flag so we can roll forward / back without
-            # redeploying. Only attaches when the bot is running live AND
-            # the metaapi backend is in use (the listener has no value
-            # against the self-hosted bridge or direct MT5 path).
+            # Phase 3: spin up a parallel MetaAPI streaming connection for
+            # live trade events. The bridge keeps using its RPC connection
+            # for orders (lower latency, simpler request/response model);
+            # this streaming side-channel only listens for deal events so
+            # bot_trades is updated the moment the broker confirms a fill.
+            #
+            # Behind a feature flag (USE_STREAMING_TRADE_LISTENER, default
+            # on) so we can fall back to parsed-print without a redeploy.
+            # Only valid for live + metaapi backends.
             if (
                 bot.is_live
                 and self._mt5_backend == "metaapi"
                 and _streaming_listener_enabled()
+                and account.metaapi_account_id
             ):
                 try:
                     from .trade_listener import BotTradeListener
@@ -139,16 +148,18 @@ class BotManager:
                         magic_number=bot.magic_number or 0,
                         session_factory=self._session_factory,
                     )
-                    bridge._trade_listener = listener
-                    logger.info(
-                        "Streaming trade listener wired for bot %s (magic=%s)",
-                        bot_id, bot.magic_number,
+                    # Cold-connecting a streaming connection takes 30-60s.
+                    # Don't block start_bot on it — fire-and-forget; the
+                    # parsed-print path covers any trades during that window.
+                    asyncio.create_task(
+                        self._attach_streaming_listener(
+                            bot_id, listener, account.metaapi_account_id
+                        ),
+                        name=f"streaming-listener-{bot_id}",
                     )
                 except Exception:
-                    # Never block bot start on listener wiring; the parsed
-                    # print path remains active.
                     logger.exception(
-                        "Failed to construct BotTradeListener for bot %s — "
+                        "Failed to schedule streaming listener for bot %s — "
                         "falling back to parsed-print only", bot_id,
                     )
 
@@ -343,6 +354,8 @@ class BotManager:
         finally:
             await db_handler.stop()
             bot_logger.removeHandler(db_handler)
+            # Tear down the streaming listener connection if one was attached.
+            await self._close_streaming_connection(bot_id)
             # Keep account deployed — redeploying costs $0.13 and takes 30-60s.
             # Accounts only undeploy when user disconnects from Accounts page.
             self._running_bots.pop(bot_id, None)
@@ -350,6 +363,75 @@ class BotManager:
             self._bot_loggers.pop(bot_id, None)
             self._bot_account_ids.pop(bot_id, None)
             self._start_locks.pop(bot_id, None)
+
+    async def _attach_streaming_listener(
+        self,
+        bot_id: uuid.UUID,
+        listener,
+        metaapi_account_id: str,
+    ) -> None:
+        """Open a streaming connection and attach the trade listener.
+
+        Background task — must not raise into the caller. Cold-connect
+        time on MetaAPI is 30-60s; the parsed-print path covers trades
+        during that window. Once attached, this connection stays open
+        until the bot stops.
+        """
+        from metaapi_cloud_sdk import MetaApi
+
+        try:
+            api = MetaApi(token=self._metaapi_token)
+            account = await api.metatrader_account_api.get_account(metaapi_account_id)
+
+            if account.state not in ("DEPLOYED", "DEPLOYING"):
+                logger.info(
+                    "Streaming listener: deploying account %s for bot %s",
+                    metaapi_account_id, bot_id,
+                )
+                await account.deploy()
+            await account.wait_connected()
+
+            streaming_conn = account.get_streaming_connection()
+            streaming_conn.add_synchronization_listener(listener)
+            await streaming_conn.connect()
+            await streaming_conn.wait_synchronized()
+
+            self._bot_streaming_connections[bot_id] = streaming_conn
+            logger.info(
+                "Streaming trade listener attached for bot %s (magic=%s)",
+                bot_id, listener.magic_number,
+            )
+            metrics.count(
+                "bot.trade.listener_attached",
+                1,
+                attributes={"bot_id": str(bot_id)},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Streaming listener attach failed for bot %s — bot continues "
+                "with parsed-print fallback", bot_id,
+            )
+            metrics.count(
+                "bot.trade.listener_error",
+                1,
+                attributes={"hook": "attach"},
+            )
+
+    async def _close_streaming_connection(self, bot_id: uuid.UUID) -> None:
+        """Close the parallel streaming connection for a bot, if any."""
+        conn = self._bot_streaming_connections.pop(bot_id, None)
+        if conn is None:
+            return
+        try:
+            await conn.close()
+            logger.info("Streaming listener connection closed for bot %s", bot_id)
+        except Exception:
+            logger.warning(
+                "Failed to close streaming listener connection for bot %s",
+                bot_id, exc_info=True,
+            )
 
     async def _undeploy_account(self, bot_id: uuid.UUID) -> None:
         """Undeploy the MetaAPI account so it stops consuming resources."""
@@ -523,6 +605,10 @@ class BotManager:
                     pass
             except Exception as e:
                 logger.error("Error stopping bot %s during shutdown: %s", bot_id, e)
+        # Close any lingering streaming listener connections so MetaAPI
+        # doesn't keep them alive across the restart.
+        for bot_id in list(self._bot_streaming_connections.keys()):
+            await self._close_streaming_connection(bot_id)
         self._running_bots.clear()
         self._bot_bridges.clear()
         logger.info("All bot tasks stopped (status kept as 'running' for auto-restart)")

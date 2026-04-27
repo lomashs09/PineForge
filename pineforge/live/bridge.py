@@ -252,15 +252,10 @@ class LiveBridge:
             await connection.wait_synchronized(timeout_in_seconds=120)
             self._print("Connected to MT5 account.\n")
 
-            # Attach streaming trade listener if BotManager provided one.
-            # Failures here are non-fatal: the parsed-print fallback path
-            # in BotPrintCapture still records trades.
-            if self._trade_listener is not None:
-                try:
-                    connection.add_synchronization_listener(self._trade_listener)
-                    self._print("Streaming trade listener attached.")
-                except Exception as e:
-                    self._print(f"  [WARN] Trade listener attach failed: {e}")
+            # NOTE: a SynchronizationListener cannot be attached to an RPC
+            # connection — the SDK only supports listeners on streaming
+            # connections. BotManager opens a parallel streaming connection
+            # for the listener; nothing for us to do here.
 
             executor = Executor(connection, cfg.symbol, cfg.is_live, magic=cfg.magic_number)
 
