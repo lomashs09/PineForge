@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ..models.bot_log import BotLog
@@ -210,7 +211,13 @@ class BotDatabaseHandler(logging.Handler):
                 logging.getLogger(__name__).warning("Bot logger DB flush failed: %s", exc)
 
     async def _flush_all(self):
-        """Drain the queue and insert all pending entries."""
+        """Drain the queue and insert all pending entries.
+
+        Trades use INSERT ... ON CONFLICT DO NOTHING keyed on the partial
+        unique index (bot_id, order_id) added in alembic c1d2e3f4a5b6.
+        That makes the parsed-print path idempotent against the streaming
+        listener (Phase 3) and against re-emits during reconnects.
+        """
         logs = []
         trades = []
         while not self._queue.empty():
@@ -230,12 +237,39 @@ class BotDatabaseHandler(logging.Handler):
             async with self.session_factory() as session:
                 for entry in logs:
                     session.add(BotLog(**entry))
+
                 for entry in trades:
-                    if entry.get("broker_account_id"):
+                    if not entry.get("broker_account_id"):
+                        continue
+                    order_id = entry.get("order_id") or ""
+                    is_sentinel = order_id.startswith("close-all") or order_id.startswith("dry-run")
+                    if is_sentinel:
+                        # close-all and dry-run rows don't have a unique
+                        # broker order_id, so the partial unique index
+                        # doesn't cover them — plain insert.
                         session.add(BotTrade(**entry))
+                        continue
+
+                    # Real broker order_id: use ON CONFLICT DO NOTHING so
+                    # a duplicate emission (parsed print AND streaming
+                    # listener AND a retry) lands as a single row.
+                    stmt = (
+                        pg_insert(BotTrade.__table__)
+                        .values(**entry)
+                        .on_conflict_do_nothing(
+                            index_elements=["bot_id", "order_id"],
+                        )
+                    )
+                    await session.execute(stmt)
+
                 await session.commit()
-        except Exception:
-            pass  # Don't crash the bot if logging fails
+        except Exception as exc:
+            # Bot must not crash if persistence hiccups; one flush failure
+            # is acceptable, the next cycle retries the rest of the queue.
+            logging.getLogger(__name__).warning(
+                "Bot logger DB flush failed for bot %s: %s",
+                self.bot_id, exc, exc_info=True,
+            )
 
 
 # Patterns for detecting log levels from print() output

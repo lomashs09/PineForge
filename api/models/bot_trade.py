@@ -34,5 +34,10 @@ class BotTrade(Base):
     order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Lifecycle state: open | closing | closed | reconciled_external | error.
+    # See alembic c1d2e3f4a5b6_bot_trade_lifecycle for the rationale.
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default="open"
+    )
 
     bot = relationship("Bot", back_populates="trades")
