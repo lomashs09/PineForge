@@ -499,7 +499,63 @@ async def test_phase1_schema(pool):
     async def _migration_head():
         async with pool.acquire() as c:
             row = await c.fetchrow("SELECT version_num FROM alembic_version")
-            assert_eq(row["version_num"], "c1d2e3f4a5b6")
+            assert_eq(row["version_num"], "d2e3f4a5b6c7")
+
+    async def _bots_broker_account_unique_constraint_exists():
+        async with pool.acquire() as c:
+            row = await c.fetchrow(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conname='bots_broker_account_id_unique'"
+            )
+            assert_true(row is not None,
+                        "UNIQUE constraint on bots.broker_account_id is missing")
+
+    async def _db_rejects_duplicate_broker_account():
+        # Insert a bot, then attempt a second bot on the same broker_account.
+        # Postgres must reject with a unique violation — proving the DB
+        # constraint is real and not just code-level.
+        async with pool.acquire() as c:
+            user = await c.fetchrow("SELECT id FROM users WHERE email=$1", EMAIL)
+            script = await c.fetchrow("SELECT id FROM scripts LIMIT 1")
+            ba_id = await c.fetchval(
+                "INSERT INTO broker_accounts (user_id, label, broker_name, "
+                "metaapi_account_id, mt5_login, mt5_server, is_active, created_at) "
+                "VALUES ($1, '__e2e_unique_test__', 'exness', "
+                "'00000000-0000-0000-0000-000000000099', '999999', "
+                "'__e2e_test__', false, now()) RETURNING id",
+                user["id"],
+            )
+            try:
+                await c.execute(
+                    "INSERT INTO bots (user_id, broker_account_id, script_id, name, "
+                    "symbol, timeframe, lot_size, max_lot_size, max_daily_loss_pct, "
+                    "max_open_positions, cooldown_seconds, poll_interval_seconds, "
+                    "lookback_bars, is_live, status, magic_number, created_at, updated_at) "
+                    "VALUES ($1, $2, $3, '__e2e_unique_a__', 'X', '1h', 0.01, 0.1, "
+                    "5.0, 1, 60, 60, 200, false, 'stopped', 88888881, now(), now())",
+                    user["id"], ba_id, script["id"],
+                )
+                # Second insert with same broker_account_id MUST fail
+                raised = False
+                try:
+                    await c.execute(
+                        "INSERT INTO bots (user_id, broker_account_id, script_id, name, "
+                        "symbol, timeframe, lot_size, max_lot_size, max_daily_loss_pct, "
+                        "max_open_positions, cooldown_seconds, poll_interval_seconds, "
+                        "lookback_bars, is_live, status, magic_number, created_at, updated_at) "
+                        "VALUES ($1, $2, $3, '__e2e_unique_b__', 'X', '1h', 0.01, 0.1, "
+                        "5.0, 1, 60, 60, 200, false, 'stopped', 88888882, now(), now())",
+                        user["id"], ba_id, script["id"],
+                    )
+                except Exception as e:
+                    if "bots_broker_account_id_unique" in str(e):
+                        raised = True
+                    else:
+                        raise
+                assert_true(raised, "duplicate broker_account_id was not rejected by DB")
+            finally:
+                await c.execute("DELETE FROM bots WHERE name LIKE '__e2e_unique_%'")
+                await c.execute("DELETE FROM broker_accounts WHERE id=$1", ba_id)
 
     async def _lifecycle_state_column_exists():
         async with pool.acquire() as c:
@@ -732,6 +788,8 @@ async def test_phase1_schema(pool):
         assert_true(_PARTIAL_INDEX_WHERE is not None)
 
     await t("phase1.migration_head", _migration_head())
+    await t("phase1.bots_broker_account_unique_constraint", _bots_broker_account_unique_constraint_exists())
+    await t("phase1.db_rejects_duplicate_broker_account", _db_rejects_duplicate_broker_account())
     await t("phase1.lifecycle_state_column_exists", _lifecycle_state_column_exists())
     await t("phase1.lifecycle_state_check_constraint", _lifecycle_state_check_constraint())
     await t("phase1.check_rejects_bad_value", _check_constraint_rejects_bad_value())
