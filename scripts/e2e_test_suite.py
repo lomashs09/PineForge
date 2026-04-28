@@ -1316,6 +1316,28 @@ async def test_phase4_status():
     await t("phase4.grace_period_skips_recent_bots", _grace_period_skips_recent_bots())
     await t("phase4.runtime_orphan_branch", _runtime_orphan_detected_but_not_mutated())
 
+    async def _stop_bot_cancel_handler_propagates():
+        # Regression for the "Stop button doesn't actually stop bot" bug:
+        # bot_manager._run_bot_wrapper used to swallow CancelledError and
+        # retry with a fresh bridge (losing _shutdown=True). The fix
+        # detects bridge._shutdown in the cancel handler and breaks
+        # cleanly instead. Without this the user's stop signal is lost
+        # and the bot keeps trading despite the dashboard showing
+        # status=stopped.
+        with open("api/services/bot_manager.py") as f:
+            src = f.read()
+        # Look for the explicit shutdown-check inside the CancelledError
+        # handler. Phrased as a property assertion rather than literal
+        # match so cosmetic refactors don't break it.
+        assert_true(
+            "if bridge._shutdown:" in src and "user_stopped = True" in src,
+            "bot_manager CancelledError handler must propagate when "
+            "bridge._shutdown is set; otherwise Stop is silently "
+            "swallowed by the retry loop",
+        )
+
+    await t("phase4.stop_propagates_after_user_shutdown", _stop_bot_cancel_handler_propagates())
+
 
 # ---------------------------------------------------------------------------
 # Cross-cutting: Sentry, logging, request id
