@@ -550,19 +550,26 @@ async def get_bot_trade_history(
             symbol=bot.symbol,
         )
 
-        # Filter to deals stamped with THIS bot's magic — without this,
-        # two bots on the same symbol/account would each see the other
-        # bot's deals and double-count PnL.
-        bot_magic = bot.magic_number or 0
-        deals = [d for d in deals if int(d.get("magic") or 0) == bot_magic]
-
-        # CRITICAL: MetaAPI returns deals newest-first. The pairing loop
-        # below builds entries[positionId] = entry_deal as it sees IN
-        # deals, then closes them when it sees OUT deals. If we walk
-        # newest-first the OUT arrives BEFORE the IN, finds no entry,
-        # and silently drops every trade. Sort ascending by time to
-        # guarantee opens precede closes.
+        # MetaAPI returns deals newest-first; sort ascending so opens
+        # precede closes in the pairing loop.
         deals.sort(key=lambda d: str(d.get("time", "")))
+
+        # Filter strategy: many MT5 brokers (e.g. Exness) STAMP magic on
+        # the IN (open) deal but strip it on the OUT (close) deal —
+        # OUT deals come back with magic=0. So we can't just filter the
+        # whole deal list by magic; that would drop every close deal
+        # and the pairing loop would yield nothing.
+        # Instead: identify "our" positionIds from the IN deals where
+        # magic matches, then accept any OUT deals for those positionIds
+        # regardless of OUT-side magic.
+        bot_magic = bot.magic_number or 0
+        own_position_ids = {
+            d.get("positionId")
+            for d in deals
+            if d.get("entryType") == "DEAL_ENTRY_IN"
+            and int(d.get("magic") or 0) == bot_magic
+            and d.get("positionId")
+        }
 
         # Pair entry/exit deals by position ID to show complete trades
         # Entry deals (DEAL_ENTRY_IN): profit=0, shows opening price
@@ -571,6 +578,8 @@ async def get_bot_trade_history(
         trades = []
 
         for d in deals:
+            if d.get("positionId") not in own_position_ids:
+                continue
             pos_id = d.get("positionId", "")
             entry_type = d.get("entryType", "")
 
