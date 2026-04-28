@@ -556,6 +556,14 @@ async def get_bot_trade_history(
         bot_magic = bot.magic_number or 0
         deals = [d for d in deals if int(d.get("magic") or 0) == bot_magic]
 
+        # CRITICAL: MetaAPI returns deals newest-first. The pairing loop
+        # below builds entries[positionId] = entry_deal as it sees IN
+        # deals, then closes them when it sees OUT deals. If we walk
+        # newest-first the OUT arrives BEFORE the IN, finds no entry,
+        # and silently drops every trade. Sort ascending by time to
+        # guarantee opens precede closes.
+        deals.sort(key=lambda d: str(d.get("time", "")))
+
         # Pair entry/exit deals by position ID to show complete trades
         # Entry deals (DEAL_ENTRY_IN): profit=0, shows opening price
         # Exit deals (DEAL_ENTRY_OUT): profit=actual P&L, shows closing price
