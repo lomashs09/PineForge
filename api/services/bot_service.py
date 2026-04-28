@@ -43,6 +43,28 @@ async def validate_bot_create(
     if result.scalar_one_or_none() is None:
         return "Broker account not found or not owned by you"
 
+    # Enforce one bot per broker account.
+    # Why: positions and deal history on MT5 are scoped to the broker
+    # account, not to the bot. When two bots share an account, the
+    # /positions and /history endpoints have to filter by magic_number,
+    # and brokers (e.g. Exness) strip magic on close deals — leading to
+    # silent leaks and double-counted PnL on the dashboard.
+    # Hard-enforcing one-bot-per-account at create time eliminates that
+    # whole bug class. Existing duplicate setups are grandfathered (the
+    # check fires only on NEW creates).
+    result = await db.execute(
+        select(Bot.id, Bot.name).where(
+            Bot.broker_account_id == broker_account_id,
+        )
+    )
+    existing = result.first()
+    if existing is not None:
+        return (
+            f"This broker account is already used by bot '{existing.name}'. "
+            "Each broker account can host only one bot — delete the existing "
+            "bot first, or connect another broker account."
+        )
+
     # Check script is accessible
     result = await db.execute(
         select(Script).where(Script.id == script_id)

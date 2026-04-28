@@ -435,6 +435,32 @@ async def test_bots(client: httpx.AsyncClient, token: str, pool):
         r = await client.post("/bots", headers=auth, json=body)
         assert_eq(r.status_code, 422)
 
+    async def _one_bot_per_broker_account_enforced():
+        # Try to create a bot using a broker_account_id that already has
+        # a bot. Should be rejected with a 400 mentioning the constraint.
+        async with pool.acquire() as c:
+            user = await c.fetchrow("SELECT id FROM users WHERE email=$1", EMAIL)
+            taken_ba = await c.fetchrow(
+                "SELECT broker_account_id FROM bots WHERE user_id=$1 LIMIT 1",
+                user["id"],
+            )
+            script = await c.fetchrow("SELECT id FROM scripts LIMIT 1")
+        if not (taken_ba and script):
+            return  # no fixture data — skip silently
+        body = {
+            "name": "__e2e_dup_account__",
+            "broker_account_id": str(taken_ba["broker_account_id"]),
+            "script_id": str(script["id"]),
+            "symbol": "XAUUSDm",
+            "timeframe": "1h",
+            "lot_size": 0.01,
+        }
+        r = await client.post("/bots", headers=auth, json=body)
+        assert_eq(r.status_code, 400,
+                  f"expected 400 (one-bot-per-account), got {r.status_code}: {r.text[:200]}")
+        assert_in("only one bot", r.text.lower(),
+                  f"error message missing constraint description: {r.text[:200]}")
+
     await t("bots.list", _list_bots())
     await t("bots.list.no_auth", _list_bots_no_auth())
     await t("bots.get", _get_bot())
@@ -461,6 +487,7 @@ async def test_bots(client: httpx.AsyncClient, token: str, pool):
     await t("validation.lookback_too_high", _post_lookback_too_high())
     await t("validation.name_too_long", _post_name_too_long())
     await t("validation.empty_name", _post_empty_name())
+    await t("validation.one_bot_per_broker_account", _one_bot_per_broker_account_enforced())
 
 
 # ---------------------------------------------------------------------------
