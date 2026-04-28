@@ -257,6 +257,19 @@ class BotManager:
                 except asyncio.CancelledError:
                     if self._shutting_down:
                         raise  # App is shutting down — propagate
+                    if bridge._shutdown:
+                        # User clicked Stop on the dashboard. stop_bot()
+                        # sets bridge._shutdown=True, then cancels this
+                        # task as a fallback if bridge.run() doesn't
+                        # exit within 30s. Without this branch, the
+                        # generic retry below would catch the cancel,
+                        # replace the bridge with a fresh one (and lose
+                        # _shutdown=True), and the bot would keep
+                        # running forever — exactly the "Stop doesn't
+                        # work" symptom.
+                        user_stopped = True
+                        break
+                    # Otherwise: connection drop / transient cancel — retry.
                     # Check if market is closed — don't count as retry
                     is_closed, reason = _get_market_hours()[0](bridge.config.symbol)
                     if is_closed:
