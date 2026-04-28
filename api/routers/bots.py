@@ -529,13 +529,18 @@ async def get_bot_trade_history(
     if not account or not account.metaapi_account_id or account.metaapi_account_id.startswith("direct-"):
         return []
 
-    # Get deals since bot started (or last 24h if no start time)
+    # Get deals since the bot was CREATED (not since last restart). Using
+    # bot.started_at here is wrong because the bot_manager rewrites
+    # started_at to now() on every restart, which collapses the history
+    # window to "since last restart" — typically minutes — and the user
+    # sees an empty list. created_at is set once at bot creation and
+    # never changes.
     from datetime import datetime as dt, timezone as tz, timedelta
-    start = bot.started_at
+    start = bot.created_at
     if start and isinstance(start, str):
         start = dt.fromisoformat(start)
     if not start:
-        start = dt.now(tz.utc) - timedelta(hours=24)
+        start = dt.now(tz.utc) - timedelta(days=30)
     if start.tzinfo is None:
         start = start.replace(tzinfo=tz.utc)
     end = dt.now(tz.utc)
