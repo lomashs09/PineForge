@@ -399,45 +399,64 @@ class BotManager:
         """
         from metaapi_cloud_sdk import MetaApi
 
-        try:
+        async def _do_attach():
             api = MetaApi(token=self._metaapi_token)
             account = await api.metatrader_account_api.get_account(metaapi_account_id)
-
             if account.state not in ("DEPLOYED", "DEPLOYING"):
                 logger.info(
                     "Streaming listener: deploying account %s for bot %s",
                     metaapi_account_id, bot_id,
                 )
                 await account.deploy()
-            await account.wait_connected()
+            # Cold deploy + broker connection can take 90s+; pass an
+            # explicit generous timeout so wait_connected doesn't fire
+            # its 60s default before the account finishes coming up.
+            await account.wait_connected(timeout_in_seconds=180)
 
             streaming_conn = account.get_streaming_connection()
             streaming_conn.add_synchronization_listener(listener)
             await streaming_conn.connect()
-            await streaming_conn.wait_synchronized()
+            await streaming_conn.wait_synchronized(timeout_in_seconds=180)
+            return streaming_conn
 
-            self._bot_streaming_connections[bot_id] = streaming_conn
-            logger.info(
-                "Streaming trade listener attached for bot %s (magic=%s)",
-                bot_id, listener.magic_number,
-            )
-            metrics.count(
-                "bot.trade.listener_attached",
-                1,
-                attributes={"bot_id": str(bot_id)},
+        try:
+            streaming_conn = await self._with_retries(
+                _do_attach,
+                label=f"streaming_listener_attach:{metaapi_account_id}",
+                max_attempts=3,
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception(
-                "Streaming listener attach failed for bot %s — bot continues "
-                "with parsed-print fallback", bot_id,
+
+        if streaming_conn is None:
+            # Retries exhausted. Don't surface as ERROR to Sentry — the
+            # parsed-print fallback path still records trades into
+            # bot_trades, so the bot keeps working. Log as warning so
+            # it shows up in journals but doesn't page anyone.
+            logger.warning(
+                "Streaming listener attach gave up for bot %s after retries — "
+                "bot continues on parsed-print fallback (DB inserts via "
+                "BotPrintCapture). MetaAPI account state may have been slow "
+                "to come up; reconciliation loop will close any orphan trades.",
+                bot_id,
             )
             metrics.count(
                 "bot.trade.listener_error",
                 1,
-                attributes={"hook": "attach"},
+                attributes={"hook": "attach", "outcome": "fallback_to_parsed_print"},
             )
+            return
+
+        self._bot_streaming_connections[bot_id] = streaming_conn
+        logger.info(
+            "Streaming trade listener attached for bot %s (magic=%s)",
+            bot_id, listener.magic_number,
+        )
+        metrics.count(
+            "bot.trade.listener_attached",
+            1,
+            attributes={"bot_id": str(bot_id)},
+        )
 
     async def _close_streaming_connection(self, bot_id: uuid.UUID) -> None:
         """Close the parallel streaming connection for a bot, if any."""
