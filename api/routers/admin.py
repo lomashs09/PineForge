@@ -80,11 +80,16 @@ async def list_users(
     )
     acc_count_map = {uid: cnt for uid, cnt in acc_counts_result.all()}
 
-    # Batch: total PnL per user
+    # Batch: total PnL per user. Entry-row only — close-all rows duplicate
+    # the pnl and would double-count (see bot_service.get_bot_stats).
     pnl_result = await db.execute(
         select(Bot.user_id, func.coalesce(func.sum(BotTrade.pnl), 0.0))
         .join(Bot, BotTrade.bot_id == Bot.id)
-        .where(Bot.user_id.in_(user_ids), BotTrade.pnl.isnot(None))
+        .where(
+            Bot.user_id.in_(user_ids),
+            BotTrade.pnl.isnot(None),
+            BotTrade.signal.like("entry_%"),
+        )
         .group_by(Bot.user_id)
     )
     pnl_map = {uid: float(pnl) for uid, pnl in pnl_result.all()}

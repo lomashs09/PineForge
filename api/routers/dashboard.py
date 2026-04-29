@@ -56,25 +56,33 @@ async def get_dashboard(
     winning_trades = 0
 
     if user_bot_ids:
-        # Total PnL, trades, and winning trades in a single query
+        # Total PnL, trades, and winning trades in a single query.
+        # Filter to entry rows only — close-all summary rows duplicate the
+        # pnl on the entry row and double-count if both are summed. See
+        # api/services/bot_service.get_bot_stats for the full rationale.
         result = await db.execute(
             select(
                 func.count(BotTrade.id),
                 func.coalesce(func.sum(BotTrade.pnl), 0),
                 func.count(BotTrade.id).filter(BotTrade.pnl > 0),
-            ).where(BotTrade.bot_id.in_(user_bot_ids), BotTrade.pnl.isnot(None))
+            ).where(
+                BotTrade.bot_id.in_(user_bot_ids),
+                BotTrade.pnl.isnot(None),
+                BotTrade.signal.like("entry_%"),
+            )
         )
         row = result.one()
         total_trades = row[0] or 0
         total_pnl = float(row[1] or 0)
         winning_trades = row[2] or 0
 
-        # Today's PnL
+        # Today's PnL — same entry-only filter
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         result = await db.execute(
             select(func.coalesce(func.sum(BotTrade.pnl), 0)).where(
                 BotTrade.bot_id.in_(user_bot_ids),
                 BotTrade.pnl.isnot(None),
+                BotTrade.signal.like("entry_%"),
                 BotTrade.closed_at >= today_start,
             )
         )

@@ -129,9 +129,14 @@ async def get_bot(
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
 
+    # Entry-only PnL — see get_bot_stats for the close-all dedup rationale
     pnl_result = await db.execute(
         select(func.coalesce(func.sum(BotTrade.pnl), 0.0))
-        .where(BotTrade.bot_id == bot_id, BotTrade.pnl.isnot(None))
+        .where(
+            BotTrade.bot_id == bot_id,
+            BotTrade.pnl.isnot(None),
+            BotTrade.signal.like("entry_%"),
+        )
     )
     data = BotResponse.model_validate(bot)
     data.pnl = round(float(pnl_result.scalar() or 0), 2)
