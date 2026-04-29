@@ -369,8 +369,15 @@ class BotManager:
             bot_logger.removeHandler(db_handler)
             # Tear down the streaming listener connection if one was attached.
             await self._close_streaming_connection(bot_id)
-            # Keep account deployed — redeploying costs $0.13 and takes 30-60s.
-            # Accounts only undeploy when user disconnects from Accounts page.
+            # Undeploy the MetaAPI account. Pre-one-bot-per-account this
+            # was deferred to avoid the $0.13 redeploy fee + 30-60s cold
+            # start when sibling bots might restart. Now each account
+            # has at most one bot — once that bot is gone, no one is
+            # using the account, and keeping it DEPLOYED keeps charging
+            # the user the hourly hosting fee. Skipped on app shutdown
+            # so the next process boot can resume cleanly.
+            if not self._shutting_down:
+                await self._undeploy_account(bot_id)
             self._running_bots.pop(bot_id, None)
             self._bot_bridges.pop(bot_id, None)
             self._bot_loggers.pop(bot_id, None)
@@ -446,31 +453,96 @@ class BotManager:
                 bot_id, exc_info=True,
             )
 
+    async def _with_retries(self, op_factory, *, label: str, max_attempts: int = 3) -> Optional[object]:
+        """Run an awaitable factory with exponential backoff.
+
+        Used for MetaAPI deploy/undeploy/close calls that can fail
+        transiently (network blip, partial sync, broker rate limit).
+        Never swallows CancelledError — only retries on Exception.
+
+        op_factory must be a no-arg callable that returns a fresh
+        coroutine each call (so we can re-await after a failure).
+
+        Returns the operation's result, or None after exhausting retries.
+        """
+        last_exc: Optional[BaseException] = None
+        for attempt in range(max_attempts):
+            try:
+                return await op_factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                last_exc = e
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    "%s attempt %d/%d failed: %s — retry in %ds",
+                    label, attempt + 1, max_attempts, e, wait,
+                )
+                try:
+                    await asyncio.sleep(wait)
+                except asyncio.CancelledError:
+                    raise
+        logger.error("%s failed after %d attempts: %s", label, max_attempts, last_exc)
+        metrics.count(
+            "metaapi.op_failed",
+            1,
+            attributes={"op": label.split(":", 1)[0], "attempts": max_attempts},
+        )
+        return None
+
     async def _undeploy_account(self, bot_id: uuid.UUID) -> None:
-        """Undeploy the MetaAPI account so it stops consuming resources."""
+        """Undeploy the MetaAPI account so it stops consuming resources.
+
+        With the one-bot-per-broker-account constraint, a stopped bot
+        always leaves its account fully orphaned, so undeploy is the
+        right move on every stop. Wrapped in _with_retries so transient
+        MetaAPI errors don't strand a deployed account (which would
+        keep racking up Account Hosting charges).
+        """
         metaapi_account_id = self._bot_account_ids.get(bot_id)
         if not metaapi_account_id or not self._metaapi_token:
             return
 
-        # Only undeploy if no OTHER running bot uses the same account
+        # Defensive check: in case a future change relaxes the
+        # one-bot-per-account constraint, don't undeploy if siblings
+        # are still running on the same account.
         other_uses = any(
             aid == metaapi_account_id
             for bid, aid in self._bot_account_ids.items()
             if bid != bot_id and bid in self._running_bots
         )
         if other_uses:
-            logger.info("Skipping undeploy for %s — other bots still using it", metaapi_account_id)
+            logger.info(
+                "Skipping undeploy for %s — other bots still using it",
+                metaapi_account_id,
+            )
             return
 
-        try:
-            from metaapi_cloud_sdk import MetaApi
+        from metaapi_cloud_sdk import MetaApi
+
+        async def _do_undeploy():
             api = MetaApi(token=self._metaapi_token)
             account = await api.metatrader_account_api.get_account(metaapi_account_id)
             if account.state in ("DEPLOYING", "DEPLOYED"):
                 await account.undeploy()
                 logger.info("Undeployed MetaAPI account %s", metaapi_account_id)
-        except Exception as e:
-            logger.warning("Failed to undeploy account %s: %s", metaapi_account_id, e)
+                metrics.count(
+                    "metaapi.account_undeployed",
+                    1,
+                    attributes={"account": metaapi_account_id},
+                )
+            else:
+                logger.info(
+                    "Account %s already in state %s — skipping undeploy",
+                    metaapi_account_id, account.state,
+                )
+            return account.state
+
+        await self._with_retries(
+            _do_undeploy,
+            label=f"undeploy_account:{metaapi_account_id}",
+            max_attempts=3,
+        )
 
     async def stop_bot(self, bot_id: uuid.UUID) -> dict:
         """Gracefully stop a running bot and close all its open positions.

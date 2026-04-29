@@ -79,7 +79,22 @@ async def validate_bot_create(
 
 
 async def get_bot_stats(db: AsyncSession, bot_id: uuid.UUID) -> dict:
-    """Aggregate trade statistics for a bot in a single query."""
+    """Aggregate trade statistics for a bot in a single query.
+
+    Each completed trade is recorded TWICE in bot_trades:
+      * One entry row (signal LIKE 'entry_%'), which gets exit_price
+        and pnl filled in by the streaming trade listener (Phase 3) or
+        position reconciliation (Phase 2) when the position closes.
+      * One legacy close-all summary row (signal='close', order_id='close-all'),
+        written by BotPrintCapture from the bot's stdout.
+
+    Both rows carry the same realized pnl, so summing all rows
+    DOUBLE-COUNTS — that's the dashboard-vs-history discrepancy users hit.
+    The entry row is the canonical source: it's the only path that
+    survives reconciliation of external closes (close-all rows are never
+    written for those), so we filter to entry-style signals here and
+    everywhere we aggregate PnL.
+    """
     result = await db.execute(
         select(
             func.count(BotTrade.id),
@@ -88,7 +103,11 @@ async def get_bot_stats(db: AsyncSession, bot_id: uuid.UUID) -> dict:
             func.max(BotTrade.pnl),
             func.min(BotTrade.pnl),
             func.count(BotTrade.id).filter(BotTrade.pnl > 0),
-        ).where(BotTrade.bot_id == bot_id, BotTrade.pnl.isnot(None))
+        ).where(
+            BotTrade.bot_id == bot_id,
+            BotTrade.pnl.isnot(None),
+            BotTrade.signal.like("entry_%"),
+        )
     )
     row = result.one()
     closed_count = row[0] or 0
@@ -98,9 +117,13 @@ async def get_bot_stats(db: AsyncSession, bot_id: uuid.UUID) -> dict:
     worst = float(row[4] or 0)
     winning = row[5] or 0
 
-    # Also get total trade count (including those without PnL — still open)
+    # Total trade count = entry rows only (each entry == one trade attempt;
+    # close-all rows are duplicate summaries, not separate trades).
     total_result = await db.execute(
-        select(func.count(BotTrade.id)).where(BotTrade.bot_id == bot_id)
+        select(func.count(BotTrade.id)).where(
+            BotTrade.bot_id == bot_id,
+            BotTrade.signal.like("entry_%"),
+        )
     )
     total_trades = total_result.scalar() or 0
 

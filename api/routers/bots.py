@@ -52,12 +52,19 @@ async def list_bots(
     )
     bots = result.scalars().all()
 
-    # Compute PnL for each bot from trades
+    # Compute PnL for each bot from trades.
+    # Filter to entry rows only — each closed trade is also recorded as
+    # a legacy close-all summary row with the same pnl, and summing
+    # both double-counts. See get_bot_stats for the full explanation.
     bot_ids = [b.id for b in bots]
     if bot_ids:
         pnl_result = await db.execute(
             select(BotTrade.bot_id, func.coalesce(func.sum(BotTrade.pnl), 0.0))
-            .where(BotTrade.bot_id.in_(bot_ids), BotTrade.pnl.isnot(None))
+            .where(
+                BotTrade.bot_id.in_(bot_ids),
+                BotTrade.pnl.isnot(None),
+                BotTrade.signal.like("entry_%"),
+            )
             .group_by(BotTrade.bot_id)
         )
         pnl_map = {row[0]: float(row[1]) for row in pnl_result.all()}
@@ -166,17 +173,69 @@ async def update_bot(
 @router.delete("/{bot_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bot(
     bot_id: UUID,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Delete a bot — closes any orphan broker positions and undeploys
+    the MetaAPI account before removing the DB row.
+
+    Even though stop_bot is supposed to close all positions and
+    undeploy on user-initiated stop, defensive cleanup here covers:
+      * Bots that crashed before stop_bot finished
+      * Manual position open between stop and delete
+      * Reconciliation orphans the user can't see in the UI
+    """
     result = await db.execute(
-        select(Bot).where(Bot.id == bot_id, Bot.user_id == current_user.id)
+        select(Bot)
+        .options(selectinload(Bot.broker_account))
+        .where(Bot.id == bot_id, Bot.user_id == current_user.id)
     )
     bot = result.scalar_one_or_none()
     if bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
     if bot.status in ("running", "starting"):
         raise HTTPException(status_code=400, detail="Stop the bot before deleting")
+
+    # Close any orphan broker positions tagged with this bot's magic
+    # before tearing down. Best-effort: if MetaAPI is unreachable, log
+    # and continue with the delete — the broker's own SL/TP will close
+    # the position eventually.
+    settings = get_settings()
+    account = bot.broker_account
+    if (
+        settings.METAAPI_TOKEN
+        and account
+        and account.metaapi_account_id
+        and not account.metaapi_account_id.startswith("direct-")
+        and bot.magic_number
+    ):
+        try:
+            from ..services.account_service import (
+                close_positions_by_magic,
+                undeploy_account,
+            )
+            await close_positions_by_magic(
+                settings.METAAPI_TOKEN,
+                account.metaapi_account_id,
+                int(bot.magic_number),
+            )
+            # With one-bot-per-account, deleting the bot orphans the
+            # account — undeploy so the user stops paying for hosting.
+            await undeploy_account(
+                settings.METAAPI_TOKEN,
+                account.metaapi_account_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "delete_bot cleanup failed for bot %s account %s: %s",
+                bot_id, account.metaapi_account_id, e,
+            )
+            # Don't block the delete on cleanup failure — the account
+            # will still be billed until the user manually disconnects.
+            # The position-reconciliation loop catches orphaned trades
+            # on next cycle.
+
     await db.delete(bot)
 
 

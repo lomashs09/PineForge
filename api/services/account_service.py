@@ -145,6 +145,110 @@ async def get_account_info(metaapi_token: str, metaapi_account_id: str) -> dict:
     }
 
 
+async def close_positions_by_magic(
+    metaapi_token: str,
+    metaapi_account_id: str,
+    magic_number: int,
+    *,
+    max_attempts: int = 3,
+) -> dict:
+    """Close every open position on this account that carries the given magic.
+
+    Used at bot delete time so an orphaned bot doesn't leave broker
+    positions trading without a manager. Best-effort with retries —
+    callers should log failures but not block the calling flow.
+
+    Returns {"closed": N, "failed": M, "skipped": K}.
+    """
+    from metaapi_cloud_sdk import MetaApi
+
+    api = MetaApi(token=metaapi_token)
+    account = await api.metatrader_account_api.get_account(metaapi_account_id)
+    if account.state not in ("DEPLOYING", "DEPLOYED"):
+        # Nothing to close on an undeployed account
+        return {"closed": 0, "failed": 0, "skipped": 0, "reason": "not_deployed"}
+
+    await account.wait_connected(timeout_in_seconds=60)
+    connection = account.get_rpc_connection()
+    await connection.connect()
+    stats = {"closed": 0, "failed": 0, "skipped": 0}
+    try:
+        await connection.wait_synchronized(timeout_in_seconds=60)
+        positions = await connection.get_positions()
+        own = [p for p in (positions or []) if int(p.get("magic") or 0) == magic_number]
+        for pos in own:
+            pid = pos.get("id")
+            if not pid:
+                stats["skipped"] += 1
+                continue
+            last_exc = None
+            for attempt in range(max_attempts):
+                try:
+                    await asyncio.wait_for(connection.close_position(pid), timeout=30)
+                    stats["closed"] += 1
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    last_exc = e
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(2 ** attempt)
+            else:
+                logger.warning(
+                    "close_positions_by_magic: position %s failed after %d attempts: %s",
+                    pid, max_attempts, last_exc,
+                )
+                stats["failed"] += 1
+    finally:
+        try:
+            await connection.close()
+        except Exception:
+            pass
+    return stats
+
+
+async def undeploy_account(
+    metaapi_token: str,
+    metaapi_account_id: str,
+    *,
+    max_attempts: int = 3,
+) -> str:
+    """Undeploy a MetaAPI account so it stops accruing hosting charges.
+
+    Retries on transient errors. No-op if the account is already
+    UNDEPLOYED or in a terminal state.
+
+    Returns the final account state string (e.g. 'UNDEPLOYED').
+    """
+    from metaapi_cloud_sdk import MetaApi
+
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            api = MetaApi(token=metaapi_token)
+            account = await api.metatrader_account_api.get_account(metaapi_account_id)
+            if account.state not in ("DEPLOYING", "DEPLOYED"):
+                logger.info(
+                    "undeploy_account %s: already %s, skipping",
+                    metaapi_account_id, account.state,
+                )
+                return account.state
+            await account.undeploy()
+            logger.info("undeploy_account %s: undeployed", metaapi_account_id)
+            return "UNDEPLOYED"
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(2 ** attempt)
+    logger.error(
+        "undeploy_account %s failed after %d attempts: %s",
+        metaapi_account_id, max_attempts, last_exc,
+    )
+    return "UNKNOWN"
+
+
 async def get_account_positions(metaapi_token: str, metaapi_account_id: str) -> list:
     """Get open positions from MetaAPI."""
     from metaapi_cloud_sdk import MetaApi
