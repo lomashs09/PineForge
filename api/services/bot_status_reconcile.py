@@ -72,22 +72,37 @@ async def reconcile_bot_status_once(
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=GRACE_PERIOD_SECONDS)
 
     try:
+        from ..models.broker_account import BrokerAccount
         async with session_factory() as session:
             result = await session.execute(
-                select(Bot).where(Bot.status == "running")
+                select(Bot, BrokerAccount.metaapi_account_id)
+                .join(BrokerAccount, BrokerAccount.id == Bot.broker_account_id, isouter=True)
+                .where(Bot.status == "running")
             )
-            db_running_bots = list(result.scalars().all())
+            db_running_pairs = list(result.all())
+            db_running_bots = [pair[0] for pair in db_running_pairs]
             stats["db_running"] = len(db_running_bots)
 
             db_running_ids = set()
             orphan_ids = []
-            for bot in db_running_bots:
+            demo_skipped = 0
+            for bot, metaapi_account_id in db_running_pairs:
                 db_running_ids.add(bot.id)
                 # Skip bots within the grace window — they may be mid-startup
                 if bot.started_at and bot.started_at > cutoff:
                     continue
+                # Skip demo bots (metaapi_account_id starts with "demo-").
+                # These are seeded fixtures for product walkthroughs / video
+                # recording — they have no real MetaAPI account, so they
+                # will never be in BotManager._running_bots and would
+                # otherwise be flagged on every cycle.
+                if (metaapi_account_id or "").startswith("demo-"):
+                    demo_skipped += 1
+                    continue
                 if bot.id not in runtime_ids:
                     orphan_ids.append(bot.id)
+            if demo_skipped:
+                stats["demo_skipped"] = demo_skipped
 
             for bot in db_running_bots:
                 if bot.id in orphan_ids:
