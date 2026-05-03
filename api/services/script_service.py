@@ -81,15 +81,23 @@ async def seed_system_scripts(db: AsyncSession):
     pine_files = sorted(EXAMPLES_DIR.glob("*.pine"))
     seeded = 0
 
-    # Fetch all existing system script filenames in one query
+    # Fetch all existing system script filenames + names in one query.
+    # We dedupe on BOTH so a typo in examples/ (e.g. two .pine files
+    # whose strategy() name is the same but the filename differs by a
+    # `_q001` suffix) doesn't insert the same strategy twice with
+    # different IDs. Caught the hard way: had two "Gold Trend Hunter V2"
+    # rows on prod because gold_trend_hunter.pine and
+    # gold_trend_hunter_q001.pine both shipped.
     result = await db.execute(
-        select(Script.filename).where(Script.is_system == True)
+        select(Script.filename, Script.name).where(Script.is_system == True)
     )
-    existing = {row[0] for row in result.all()}
+    rows = result.all()
+    existing_filenames = {r[0] for r in rows}
+    existing_names = {r[1] for r in rows}
 
     for path in pine_files:
         filename = path.name
-        if filename in existing:
+        if filename in existing_filenames:
             continue
 
         source = path.read_text()
@@ -99,6 +107,14 @@ async def seed_system_scripts(db: AsyncSession):
             continue  # Skip non-strategy files
 
         name = match.group(1)
+        if name in existing_names:
+            logger.warning(
+                "seed_system_scripts: skipping %s — strategy name %r already "
+                "seeded under a different filename. Rename or delete one.",
+                filename, name,
+            )
+            continue
+        existing_names.add(name)
         script = Script(
             name=name,
             filename=filename,
