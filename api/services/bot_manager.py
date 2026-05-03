@@ -653,7 +653,9 @@ class BotManager:
         try:
             async with self._session_factory() as db:
                 result = await db.execute(
-                    select(Bot).where(Bot.status.in_(["running", "starting"]))
+                    select(Bot)
+                    .options(selectinload(Bot.broker_account))
+                    .where(Bot.status.in_(["running", "starting"]))
                 )
                 bots = result.scalars().all()
         except Exception as e:
@@ -669,6 +671,17 @@ class BotManager:
         for bot in bots:
             if bot.id in self._running_bots:
                 logger.info("Bot %s already running in memory, skipping", bot.name)
+                continue
+
+            # Demo bots are seeded fixtures with synthetic metaapi_account_ids
+            # (prefix "demo-") used for product walkthroughs / video recording.
+            # They have no real MetaAPI account — calling start_bot would 404
+            # on deploy, hit the "not found" permanent-error branch in
+            # _run_bot_wrapper, and stamp bot.error_message. Leave them be:
+            # bot_status_reconcile already exempts them from the orphan check.
+            account = bot.broker_account
+            if account and (account.metaapi_account_id or "").startswith("demo-"):
+                logger.info("Bot %s is a demo bot, skipping auto-restart", bot.name)
                 continue
 
             success = False
