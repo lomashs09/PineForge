@@ -21,8 +21,14 @@ def asyncpg_connect_args(database_url: str) -> dict:
 
 settings = get_settings()
 
+# SQLAlchemy echo logs every query at INFO. On a busy bot platform this
+# floods journalctl/syslog — at peak we filled 65GB of /var/log/syslog.1
+# and starved Postgres of disk, taking the whole API down. Default OFF
+# in every environment; opt in explicitly with SQLALCHEMY_ECHO=1 when
+# debugging a query issue.
+import os as _os
 _engine_kwargs = {
-    "echo": settings.APP_ENV == "development",
+    "echo": _os.getenv("SQLALCHEMY_ECHO", "0").lower() in ("1", "true", "yes", "on"),
     # Neon serverless drops idle connections after ~5 minutes.
     # These settings prevent "connection is closed" errors:
     "pool_recycle": settings.DB_POOL_RECYCLE,

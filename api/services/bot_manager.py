@@ -416,7 +416,13 @@ class BotManager:
             streaming_conn = account.get_streaming_connection()
             streaming_conn.add_synchronization_listener(listener)
             await streaming_conn.connect()
-            await streaming_conn.wait_synchronized(timeout_in_seconds=180)
+            # The streaming connection's wait_synchronized takes a
+            # SynchronizationOptions dict (timeoutInSeconds key), NOT
+            # the timeout_in_seconds kwarg the RPC variant accepts.
+            # Passing the kwarg raises TypeError: "got an unexpected
+            # keyword argument 'timeout_in_seconds'" — the source of
+            # PYTHON-FASTAPI-C in Sentry.
+            await streaming_conn.wait_synchronized({"timeoutInSeconds": 180})
             return streaming_conn
 
         try:
