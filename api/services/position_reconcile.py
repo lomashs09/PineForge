@@ -93,6 +93,16 @@ async def reconcile_once(
             stats["skipped_accounts"] += 1
             continue
 
+        # Demo bots are seeded fixtures with synthetic metaapi_account_ids
+        # (prefix "demo-") used for product walkthroughs. They have no real
+        # MetaAPI account — calling get_account 404s, which triggers the
+        # "Get positions failed: This connection has been closed" cascade
+        # in Sentry (PYTHON-FASTAPI-W). Skip them. Mirrors the same guard
+        # in bot_status_reconcile.
+        if metaapi_account_id.startswith("demo-"):
+            stats["skipped_accounts"] += 1
+            continue
+
         # Cheap pre-check: skip accounts with no DB-open trades to reconcile
         async with session_factory() as db:
             count_result = await db.execute(
@@ -136,12 +146,12 @@ async def reconcile_once(
             )
         except Exception as e:
             stats["errors"] += 1
-            _set_sentry_tag("reconcile_account", str(metaapi_account_id))
-            logger.warning(
-                "Position reconciliation failed account=%s broker_account=%s: %s",
-                metaapi_account_id, ba_id, e,
-                exc_info=True,
-            )
+            with _sentry_scope({"reconcile_account": str(metaapi_account_id)}):
+                logger.warning(
+                    "Position reconciliation failed account=%s broker_account=%s: %s",
+                    metaapi_account_id, ba_id, e,
+                    exc_info=True,
+                )
             metrics.count(
                 "reconciliation.errors",
                 1,
@@ -322,16 +332,18 @@ async def _reconcile_account(
 
             trade.lifecycle_state = "reconciled_external"
 
-            logger.warning(
-                "Reconciled orphan trade: bot_id=%s order_id=%s symbol=%s "
-                "direction=%s opened=%s age_hours=%.1f account=%s "
-                "recovered_pnl=%s pnl=%s exit_price=%s reason=external_close",
-                trade.bot_id, trade.order_id, trade.symbol,
-                trade.direction, trade.opened_at, age_hours, metaapi_account_id,
-                recovered_pnl, trade.pnl, trade.exit_price,
-            )
-            _set_sentry_tag("bot_id", str(trade.bot_id))
-            _set_sentry_tag("order_id", str(trade.order_id))
+            with _sentry_scope({
+                "bot_id": str(trade.bot_id),
+                "order_id": str(trade.order_id),
+            }):
+                logger.warning(
+                    "Reconciled orphan trade: bot_id=%s order_id=%s symbol=%s "
+                    "direction=%s opened=%s age_hours=%.1f account=%s "
+                    "recovered_pnl=%s pnl=%s exit_price=%s reason=external_close",
+                    trade.bot_id, trade.order_id, trade.symbol,
+                    trade.direction, trade.opened_at, age_hours, metaapi_account_id,
+                    recovered_pnl, trade.pnl, trade.exit_price,
+                )
             metrics.count(
                 "bot.trade.external_close",
                 1,
@@ -361,7 +373,40 @@ async def _reconcile_account(
             stats["trades_with_pnl"] += with_pnl
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _sentry_scope(tags: dict):
+    """Push a Sentry scope so the tags only apply to events captured
+    inside the `with` block, then auto-restore on exit.
+
+    Why this matters: setting tags via the global hub (sentry_sdk.set_tag)
+    leaks them across async tasks. Earlier the position_reconcile loop
+    set reconcile_account="demo-..." on the hub and an unrelated
+    pineforge.live.executor error fired from a different bot's task
+    inherited the wrong tag — making Sentry triage misleading
+    (PYTHON-FASTAPI-W tagged with reconcile_account=demo-...). Scoped
+    tags eliminate that leakage.
+
+    No-op if sentry_sdk isn't installed.
+    """
+    try:
+        import sentry_sdk
+    except Exception:
+        yield
+        return
+    with sentry_sdk.push_scope() as scope:
+        for k, v in tags.items():
+            scope.set_tag(k, v)
+        yield
+
+
 def _set_sentry_tag(key: str, value: str) -> None:
+    """Deprecated — use _sentry_scope() instead. Kept as a no-op to avoid
+    breaking any caller mid-refactor; the tag is set on the global hub
+    and WILL leak across async tasks. Replace remaining callers with
+    `with _sentry_scope({key: value}):` blocks."""
     try:
         import sentry_sdk
         sentry_sdk.set_tag(key, value)
