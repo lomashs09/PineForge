@@ -53,15 +53,32 @@ async def _check_bots(session_factory: async_sessionmaker, alert_email: str):
     stale_cutoff = now - timedelta(minutes=STALE_THRESHOLD_MINUTES)
 
     async with session_factory() as db:
-        # Get all bots that claim to be running
+        # Get all bots that claim to be running. Eager-load broker_account
+        # so we can identify demo bots (synthetic metaapi_account_id starting
+        # with "demo-") without an N+1 query.
+        from sqlalchemy.orm import selectinload
         running_bots = (await db.execute(
-            select(Bot).where(Bot.status == "running")
+            select(Bot)
+            .options(selectinload(Bot.broker_account))
+            .where(Bot.status == "running")
         )).scalars().all()
 
         if not running_bots:
             return
 
         for bot in running_bots:
+            # Demo bots are seeded fixtures used for product walkthroughs and
+            # video recording (see scripts/seed_demo.py). They never produce
+            # real logs because they have no MetaAPI account — but their
+            # status stays 'running' so the dashboard shows them green for
+            # demos. Without this skip, bot_health_check fires a daily
+            # "stuck bot" alert email forever. Mirrors the same demo guard
+            # in bot_status_reconcile, position_reconcile, and
+            # restart_crashed_bots.
+            account = bot.broker_account
+            if account and (account.metaapi_account_id or "").startswith("demo-"):
+                continue
+
             # Check if market is open for this symbol
             try:
                 from pineforge.live.market_hours import is_market_likely_closed
