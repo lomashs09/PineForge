@@ -170,6 +170,8 @@ async def run_backtest(
                 use_twelvedata = True
 
         def _fetch(fetch_start_date: str):
+            # Intraday windows that already exceed yfinance's lookback go
+            # straight to Twelve Data.
             if use_twelvedata:
                 from pineforge.data_twelvedata import download as td_download
                 try:
@@ -178,7 +180,24 @@ async def run_backtest(
                 except Exception as td_err:
                     logger.warning("Twelve Data failed for %s: %s — falling back to yfinance", symbol, td_err)
             from pineforge.data import download
-            return download(symbol=symbol, start=fetch_start_date, end=end, interval=interval)
+            try:
+                return download(symbol=symbol, start=fetch_start_date, end=end, interval=interval)
+            except Exception as yf_err:
+                # yfinance is unreliable for futures tickers — it intermittently
+                # raises "possibly delisted; no price data found" for GC=F
+                # (gold) and similar even when the ticker is fully active.
+                # Root cause is upstream cookie/crumb auth flakiness, not
+                # actual delisting. If Twelve Data is configured, retry there
+                # before surfacing the error to the user (Sentry FASTAPI-Y/Z/10).
+                if settings.TWELVEDATA_API_KEY:
+                    logger.warning(
+                        "yfinance failed for %s (%s) — falling back to Twelve Data: %s",
+                        symbol, interval, yf_err,
+                    )
+                    from pineforge.data_twelvedata import download as td_download
+                    return td_download(symbol=symbol, start=fetch_start_date, end=end,
+                                       interval=interval, api_key=settings.TWELVEDATA_API_KEY)
+                raise
 
         # Try with warmup first; fall back to no-warmup if it fails
         try:
